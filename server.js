@@ -227,7 +227,8 @@ function isVideoPlatform(url) {
     'dailymotion.com/video',
     'facebook.com/watch',
     'instagram.com/p/',
-    'tiktok.com/'
+    'tiktok.com/',
+    'googlevideo.com' // direct Google video delivery links (videoplayback) - treat as video
   ];
   return platforms.some(platform => url.includes(platform));
 }
@@ -388,14 +389,59 @@ app.get("/config", (req, res) => {
   });
 });
 
+// === AJOUT : ROUTE CAPTURE EXTENSION ===
+// À placer AVANT la section "// ================= DOWNLOAD LOGIC ================="
+
+app.post("/api/capture", async (req, res) => {
+  const { url, type, tabId } = req.body || {};
+
+  if (!url) {
+    return res.status(400).json({ error: "URL manquante" });
+  }
+
+  // Validation protocole & domaine
+  if (!isAllowedProtocol(url) || !isDomainAllowed(url)) {
+    return res.status(403).json({ error: "URL non autorisée" });
+  }
+
+  log('INFO', 'Flux capturé depuis extension', { type, url: url.substring(0, 120), tabId });
+
+  // Heuristique :
+  // - mp4 direct → aria2
+  // - m3u8 / mpd → ffmpeg
+  // - plateformes vidéo → yt-dlp
+
+  const isStream = /\.(m3u8|mpd)(\?|$)/i.test(url);
+  const isVideo = isVideoPlatform(url);
+
+  // Délégation vers la route /download existante
+  try {
+    const resp = await fetch(`http://localhost:${PORT}/download`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url,
+        ua: defaultUA(),
+        singleSegment: isStream,
+      })
+    });
+
+    const data = await resp.json();
+    res.json({ ok: true, delegated: true, data });
+  } catch (e) {
+    log('ERROR', 'Échec délégation capture → download', { error: e.message });
+    res.status(500).json({ error: 'Échec traitement capture' });
+  }
+});
+
 // ================= DOWNLOAD LOGIC =================
 function startDownload(id) {
   const download = activeDownloads.get(id);
   if (!download) return;
 
-  const { url, filename, ua, referer, cookies, noCheckCert, singleSegment } = download.config;
+  const { url, filename, ua, referer, cookies, noCheckCert, singleSegment, forceVideo } = download.config;
   let { retryCount } = download;
-  const isVideo = isVideoPlatform(url);
+  const isVideo = !!forceVideo || isVideoPlatform(url);
 
   download.info.status = 'downloading';
   download.info.startedAt = new Date().toISOString();
@@ -634,6 +680,44 @@ app.post("/download", async (req, res) => {
     return res.status(403).json({ error: `Domaine non autorisé: ${hostname}` });
   }
 
+  // ----- Robustesse: réparer/valider le champ `url` (parfois l'extension poste des headers dans url) -----
+  let forceVideo = false;
+
+  if (typeof url === 'string' && (url.includes('\n') || url.includes('\r') || /referer[:=]/i.test(url))) {
+    const match = url.match(/https?:\/\/[^\s'"]+/i);
+    if (match) {
+      log('WARN', 'URL malformée reçue, extraction de la vraie URL', { original: url.substring(0,200), extracted: match[0] });
+      req.body.url = match[0];
+      // Mettre à jour la variable locale `url`
+      url = match[0];
+    } else {
+      log('ERROR', 'URL invalide reçue (champ `url` contient probablement des headers)', { sample: url.substring(0,200) });
+      return res.status(400).json({ error: "URL invalide : vérifiez l'extension (le champ url contient des headers ou est malformé)" });
+    }
+  }
+
+  // ----- Détection HEAD pour reconnaître les manifests DASH / JSON (ex: Vimeo) -----
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+    const headRes = await fetch(url, {
+      method: 'HEAD',
+      headers: { 'User-Agent': defaultUA(ua) },
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+
+    const ct = (headRes.headers.get('content-type') || '').toLowerCase();
+
+    if (ct.includes('application/vnd.vimeo.dash+json') || ct.includes('application/dash+xml') || ct.includes('application/manifest+json')) {
+      forceVideo = true;
+      log('INFO', 'HEAD content-type indique DASH/manifest (forçage vidéo)', { url: url.substring(0,120), contentType: ct });
+    }
+  } catch (e) {
+    log('WARN', 'HEAD request échouée (skip content-type detection)', { error: e.message, url: url.substring(0,120) });
+  }
+
   // Vérification espace disque (uniquement pour fichiers directs)
   if (!isVideoPlatform(url) && !url.match(/\.(m3u8|mpd)/i)) {
     try {
@@ -691,7 +775,7 @@ app.post("/download", async (req, res) => {
   };
 
   const downloadConfig = {
-    url, referer, ua, noCheckCert, customFilename, singleSegment, cookies, filename
+    url, referer, ua, noCheckCert, customFilename, singleSegment, cookies, filename, forceVideo
   };
 
   log('INFO', `Nouveau téléchargement en file d'attente: ${filename}`, {

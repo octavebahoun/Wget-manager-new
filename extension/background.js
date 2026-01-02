@@ -101,6 +101,8 @@ class TabStateManager {
 
 const stateManager = new TabStateManager();
 
+// URL du serveur local (modifiable si besoin)
+const SERVER_URL = "http://localhost:3000";
 // Nettoyage périodique (toutes les 30 minutes)
 setInterval(() => {
   stateManager.cleanupInactiveTabs();
@@ -468,3 +470,42 @@ if (typeof self !== 'undefined') {
     }
   };
 }
+
+// Gestion des commandes clavier (ex: quick_download)
+chrome.commands.onCommand.addListener(async (command) => {
+  try {
+    if (command !== 'quick_download') return;
+
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.id) {
+      console.warn('[COMMAND] Aucun onglet actif pour quick_download');
+      return;
+    }
+
+    const tabId = tab.id;
+    const streams = stateManager.getStreams(tabId) || [];
+    const url = streams.length > 0 ? streams[0] : tab.url;
+
+    if (!url) {
+      console.warn('[COMMAND] Aucun URL disponible pour téléchargement rapide');
+      return;
+    }
+
+    console.log(`[COMMAND] quick_download déclenché (tab ${tabId}) -> ${url.substring(0,120)}`);
+
+    // Déléguer au serveur via la route /api/capture (qui redirige vers /download)
+    try {
+      await fetch(`${SERVER_URL}/api/capture`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, type: 'quick', tabId })
+      });
+      console.log('[COMMAND] Requête envoyée au serveur pour téléchargement rapide');
+    } catch (e) {
+      console.error('[COMMAND] Échec envoi capture → serveur', e);
+    }
+
+  } catch (err) {
+    console.error('[COMMAND] Erreur gestion commande', err);
+  }
+});
