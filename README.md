@@ -30,8 +30,8 @@ Supporte : DASH / HLS / MP4 / Vimeo / sites avec headers personnalisés
 1. Cloner le dépôt
 
 ```bash
-git clone https://github.com/tonpseudo/web-wget.git
-cd web-wget
+git clone https://github.com/octavebahoun/Wget-manager-new
+cd Wget-manager-new
 ```
 
 2. Installer les dépendances
