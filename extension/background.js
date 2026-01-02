@@ -37,11 +37,11 @@ class TabStateManager {
     if (!this.detectedStreams.has(tabId)) {
       this.detectedStreams.set(tabId, new Set());
     }
-    
+
     const streams = this.detectedStreams.get(tabId);
     const sizeBefore = streams.size;
     streams.add(url);
-    
+
     return streams.size > sizeBefore; // Retourne true si nouveau stream
   }
 
@@ -90,7 +90,7 @@ class TabStateManager {
   // Nettoyer les onglets inactifs (plus vieux que 1h)
   cleanupInactiveTabs() {
     const oneHourAgo = Date.now() - (60 * 60 * 1000);
-    
+
     this.tabMetadata.forEach((metadata, tabId) => {
       if (metadata.timestamp < oneHourAgo) {
         this.clearTab(tabId);
@@ -146,7 +146,7 @@ const messageHandlers = {
 
     stateManager.setDRM(tabId, true);
     await BadgeManager.updateBadge(tabId);
-    
+
     console.log(`[DRM] Détecté sur l'onglet ${tabId}`);
   },
 
@@ -157,7 +157,7 @@ const messageHandlers = {
 
     stateManager.setBlob(tabId, true);
     await BadgeManager.updateBadge(tabId);
-    
+
     console.log(`[BLOB] Détecté sur l'onglet ${tabId}`);
   },
 
@@ -167,7 +167,7 @@ const messageHandlers = {
     if (!tabId || !request.url) return;
 
     const isNewStream = stateManager.addStream(tabId, request.url);
-    
+
     if (isNewStream) {
       await BadgeManager.updateBadge(tabId);
       console.log(`[STREAM] Nouveau flux détecté sur l'onglet ${tabId}:`, request.url.substring(0, 100));
@@ -178,17 +178,17 @@ const messageHandlers = {
   [MESSAGE_TYPES.FETCH_CONTEXT]: async (request, sender, sendResponse) => {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      
+
       if (!tab?.id) {
         throw new Error("Aucun onglet actif détecté");
       }
 
       // Récupérer le contexte de la page
       let pageContext = await getPageContext(tab);
-      
+
       // Récupérer les cookies
       const cookies = await getCookies(tab.url);
-      
+
       // Récupérer le statut de l'onglet
       const tabStatus = stateManager.getTabStatus(tab.id);
 
@@ -205,7 +205,7 @@ const messageHandlers = {
       sendResponse(response);
     } catch (error) {
       console.error('[FETCH_CONTEXT] Erreur:', error);
-      sendResponse({ 
+      sendResponse({
         error: error.message,
         streams: [],
         hasDRM: false,
@@ -236,7 +236,7 @@ const messageHandlers = {
 
     stateManager.clearTab(tabId);
     await BadgeManager.clearBadge(tabId);
-    
+
     sendResponse({ success: true, message: "Données nettoyées" });
   }
 };
@@ -245,15 +245,15 @@ const messageHandlers = {
 // Récupérer le contexte de la page via content script
 async function getPageContext(tab) {
   try {
-    const context = await chrome.tabs.sendMessage(tab.id, { 
-      type: MESSAGE_TYPES.GET_CONTEXT 
+    const context = await chrome.tabs.sendMessage(tab.id, {
+      type: MESSAGE_TYPES.GET_CONTEXT
     });
-    
+
     return context;
   } catch (error) {
     // Si le content script n'est pas chargé, utiliser les infos de base
     console.warn('[CONTEXT] Content script non disponible, utilisation des infos de base');
-    
+
     let referer = "";
     try {
       referer = new URL(tab.url).origin;
@@ -291,7 +291,7 @@ async function getCookies(url) {
 // Valider l'URL d'un stream
 function isValidStreamUrl(url) {
   if (!url || typeof url !== 'string') return false;
-  
+
   const streamPatterns = [
     /\.m3u8/i,
     /\.mpd/i,
@@ -316,11 +316,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   // Exécuter le handler
   handler(request, sender, sendResponse);
-  
+
   // Retourner true pour les réponses asynchrones
-  return request.type === MESSAGE_TYPES.FETCH_CONTEXT || 
-         request.type === MESSAGE_TYPES.GET_TAB_STATUS ||
-         request.type === MESSAGE_TYPES.CLEAR_TAB_DATA;
+  return request.type === MESSAGE_TYPES.FETCH_CONTEXT ||
+    request.type === MESSAGE_TYPES.GET_TAB_STATUS ||
+    request.type === MESSAGE_TYPES.CLEAR_TAB_DATA;
 });
 
 // Nettoyage à la fermeture d'un onglet
@@ -335,14 +335,14 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     // Nouvelle navigation = nettoyer les anciennes données
     stateManager.clearTab(tabId);
     BadgeManager.clearBadge(tabId);
-    
+
     // Sauvegarder les nouvelles métadonnées
     stateManager.setMetadata(tabId, {
       url: tab.url,
       title: tab.title,
       favicon: tab.favIconUrl
     });
-    
+
     console.log(`[TAB] Navigation détectée sur l'onglet ${tabId}`);
   }
 });
@@ -350,7 +350,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 // Gestion de l'activation d'un onglet
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   const tabId = activeInfo.tabId;
-  
+
   // Rafraîchir le badge de l'onglet actif
   await BadgeManager.updateBadge(tabId);
 });
@@ -359,7 +359,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install') {
     console.log('[EXTENSION] Installation initiale');
-    
+
     // Ouvrir la page de bienvenue (optionnel)
     // chrome.tabs.create({ url: 'welcome.html' });
   } else if (details.reason === 'update') {
@@ -377,9 +377,78 @@ self.addEventListener('unhandledrejection', (event) => {
   console.error('[UNHANDLED REJECTION]', event.reason);
 });
 
+// ================= WEB REQUEST INTERCEPTION =================
+// Détection des flux via l'API réseau
+const MEDIA_EXTENSIONS = [
+  '.m3u8', '.mpd', '.f4m', '.ism', '.ts',
+  '.mp4', '.webm', '.mkv', '.flv',
+  '.mov', '.avi', '.wmv'
+];
+
+const IGNORED_DOMAINS = [
+  'doubleclick.net', 'google-analytics.com', 'facebook.com/tr',
+  'segment.io', 'fbsbx.com' // Ajouter d'autres domaines publicitaires/trackers si nécessaire
+];
+
+function isMediaUrl(url) {
+  try {
+    const urlObj = new URL(url);
+    const path = urlObj.pathname.toLowerCase();
+    const hostname = urlObj.hostname.toLowerCase();
+
+    // 1. Vérifier si domaine ignoré
+    if (IGNORED_DOMAINS.some(d => hostname.endsWith(d))) {
+      return false;
+    }
+
+    // 2. Vérifier extensions
+    if (MEDIA_EXTENSIONS.some(ext => path.endsWith(ext))) {
+      return true;
+    }
+
+    // 3. Vérifier patterns spécifiques (manifests, playlists)
+    if (path.includes('/manifest') || path.includes('/playlist') || path.includes('master.m3u8')) {
+      return true;
+    }
+
+    // 4. Vérifier Content-Type (si disponible dans onHeadersReceived mais on utilise onBeforeRequest ici pour la rapidité)
+    // Note: Pour une détection plus robuste basée sur le Content-Type, il faudrait utiliser onHeadersReceived.
+
+    return false;
+
+  } catch (e) {
+    return false;
+  }
+}
+
+chrome.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    // Filtrer les types de requêtes intéressants + GET uniquement
+    if (details.method === "GET" &&
+      (details.type === "xmlhttprequest" || details.type === "media" || details.type === "other")) {
+
+      const tabId = details.tabId;
+
+      // Ignorer les requêtes des onglets système ou (-1)
+      if (tabId === -1) return;
+
+      if (isMediaUrl(details.url)) {
+        console.log(`[NETWORK] Média détecté (tab ${tabId}): ${details.url}`);
+
+        const isNew = stateManager.addStream(tabId, details.url);
+        if (isNew) {
+          BadgeManager.updateBadge(tabId);
+        }
+      }
+    }
+  },
+  { urls: ["<all_urls>"] }
+);
+
 // ================= LOGGING & DEBUG =================
 console.log('[BACKGROUND] Service worker initialisé');
 console.log('[VERSION]', chrome.runtime.getManifest().version);
+console.log('[NETWORK] Interception webRequest active');
 
 // Exposer l'état pour le debug (accessible via chrome.runtime.getBackgroundPage())
 if (typeof self !== 'undefined') {

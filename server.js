@@ -41,6 +41,10 @@ const RETRY_ATTEMPTS = parseInt(process.env.RETRY_ATTEMPTS || "2");
 const RETRY_DELAY = parseInt(process.env.RETRY_DELAY || "3000");
 
 // ================= MIDDLEWARE =================
+app.use((req, res, next) => {
+  console.log(`[DEBUG_REQ] ${req.method} ${req.url}`);
+  next();
+});
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static("public"));
@@ -65,8 +69,23 @@ async function ensureDirectories() {
 }
 
 // ================= STATE & PERSISTENCE =================
-let activeDownloads = new Map(); // id -> { info, process, retryCount }
+let activeDownloads = new Map(); // id -> { info, config, process, retryCount }
+let downloadQueue = []; // Array of ids waiting to start
 let clients = []; // SSE clients
+
+function processQueue() {
+  const runningCount = Array.from(activeDownloads.values()).filter(d =>
+    d.info.status === 'downloading' || d.info.status === 'retrying'
+  ).length;
+
+  if (runningCount < MAX_CONCURRENT_DOWNLOADS && downloadQueue.length > 0) {
+    const nextId = downloadQueue.shift();
+    log('INFO', `Dépilement file d'attente: démarrrage de ${nextId}`);
+    startDownload(nextId);
+    // Recursively check if we can start more
+    processQueue();
+  }
+}
 
 async function saveState() {
   const data = Array.from(activeDownloads.values()).map(dl => dl.info);
@@ -82,7 +101,7 @@ async function loadState() {
     await fs.access(STATE_FILE);
     const content = await fs.readFile(STATE_FILE, 'utf8');
     const data = JSON.parse(content);
-    
+
     data.forEach(info => {
       if (info.status === 'downloading' || info.status === 'retrying') {
         info.status = 'interrupted';
@@ -92,7 +111,7 @@ async function loadState() {
       }
       activeDownloads.set(info.id, { info, process: null, retryCount: 0 });
     });
-    
+
     log('INFO', `État restauré : ${activeDownloads.size} téléchargements chargés`);
   } catch (e) {
     if (e.code !== 'ENOENT') {
@@ -131,10 +150,10 @@ function broadcast(data) {
       log('WARN', 'Erreur broadcast SSE', { clientId: c.id });
     }
   });
-  
+
   // Sauvegarder l'état sur changements importants
-  if (data.type === 'status-change' || 
-      (data.download && !['downloading'].includes(data.download.status))) {
+  if (data.type === 'status-change' ||
+    (data.download && !['downloading'].includes(data.download.status))) {
     saveState();
   }
 }
@@ -151,12 +170,12 @@ const DOMAIN_PROFILES = {
 function getDomainProfile(downloadUrl) {
   try {
     const host = new URL(downloadUrl).hostname;
-    const domain = Object.keys(DOMAIN_PROFILES).find(d => 
+    const domain = Object.keys(DOMAIN_PROFILES).find(d =>
       host === d || host.endsWith("." + d)
     );
     return domain ? DOMAIN_PROFILES[domain] : null;
-  } catch { 
-    return null; 
+  } catch {
+    return null;
   }
 }
 
@@ -167,6 +186,14 @@ function defaultUA(ua) {
 // ================= UTILITY FUNCTIONS =================
 function sanitizeFilename(filename) {
   return filename.replace(/[^a-zA-Z0-9._-]/g, "_").substring(0, 255);
+}
+
+function formatSize(bytes) {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
 }
 
 function isAllowedProtocol(url) {
@@ -180,7 +207,7 @@ function isAllowedProtocol(url) {
 
 function isDomainAllowed(url) {
   if (ALLOWED_DOMAINS.length === 0) return true;
-  
+
   try {
     const hostname = new URL(url).hostname;
     return ALLOWED_DOMAINS.some(domain =>
@@ -207,8 +234,8 @@ function isVideoPlatform(url) {
 
 // ================= ROUTES =================
 app.get("/health", (req, res) => {
-  res.json({ 
-    status: 'ok', 
+  res.json({
+    status: 'ok',
     activeDownloads: activeDownloads.size,
     maxConcurrent: MAX_CONCURRENT_DOWNLOADS
   });
@@ -237,11 +264,11 @@ app.get("/history", async (req, res) => {
           }
         })
     );
-    
+
     const validHistory = history
       .filter(Boolean)
       .sort((a, b) => b.date - a.date);
-    
+
     res.json(validHistory);
   } catch (err) {
     log('ERROR', 'Erreur lecture historique', { error: err.message });
@@ -252,11 +279,11 @@ app.get("/history", async (req, res) => {
 app.get("/transfer/:filename", (req, res) => {
   const filename = sanitizeFilename(req.params.filename);
   const filePath = path.join(downloadsDir, filename);
-  
+
   if (!fsSync.existsSync(filePath)) {
     return res.status(404).json({ error: "Fichier introuvable" });
   }
-  
+
   res.download(filePath, filename, async (err) => {
     if (!err) {
       try {
@@ -271,14 +298,14 @@ app.get("/transfer/:filename", (req, res) => {
 
 app.post("/cancel", async (req, res) => {
   const { id } = req.body;
-  
+
   if (!id) {
     return res.status(400).json({ error: "ID manquant" });
   }
-  
+
   log('INFO', `Demande d'annulation pour: ${id}`);
   const download = activeDownloads.get(id);
-  
+
   if (!download) {
     log('WARN', `Téléchargement introuvable: ${id}`);
     return res.status(404).json({ error: "Téléchargement introuvable" });
@@ -291,7 +318,7 @@ app.post("/cancel", async (req, res) => {
     download.info.status = "cancelled";
     broadcast({ type: "status-change", download: download.info });
     activeDownloads.delete(id);
-    
+
     log('SUCCESS', `Téléchargement annulé: ${download.info.filename}`);
     res.json({ success: true, message: "Téléchargement annulé" });
   } catch (err) {
@@ -303,7 +330,7 @@ app.post("/cancel", async (req, res) => {
 app.post("/cancel-all", async (req, res) => {
   log('WARN', `Annulation de tous les téléchargements (${activeDownloads.size} actifs)`);
   let cancelled = 0;
-  
+
   activeDownloads.forEach((download, id) => {
     try {
       if (download.process) {
@@ -316,10 +343,10 @@ app.post("/cancel-all", async (req, res) => {
       log('ERROR', `Erreur annulation ${id}`, { error: err.message });
     }
   });
-  
+
   activeDownloads.clear();
   await saveState();
-  
+
   log('SUCCESS', `${cancelled} téléchargements annulés`);
   res.json({ cancelled, message: `${cancelled} téléchargements annulés` });
 });
@@ -328,7 +355,7 @@ app.delete("/clear-history", async (req, res) => {
   try {
     const files = await fs.readdir(downloadsDir);
     let deleted = 0;
-    
+
     await Promise.all(
       files
         .filter(file => file !== ".gitkeep")
@@ -341,7 +368,7 @@ app.delete("/clear-history", async (req, res) => {
           }
         })
     );
-    
+
     log('INFO', `Historique nettoyé: ${deleted} fichiers supprimés`);
     res.json({ deleted, message: `${deleted} fichiers supprimés` });
   } catch (err) {
@@ -356,14 +383,239 @@ app.get("/config", (req, res) => {
     maxFileSize: MAX_FILE_SIZE,
     downloadTimeout: DOWNLOAD_TIMEOUT,
     maxConcurrent: MAX_CONCURRENT_DOWNLOADS,
-    retryAttempts: RETRY_ATTEMPTS
+    retryAttempts: RETRY_ATTEMPTS,
+    queueSize: downloadQueue.length
   });
 });
+
+// ================= DOWNLOAD LOGIC =================
+function startDownload(id) {
+  const download = activeDownloads.get(id);
+  if (!download) return;
+
+  const { url, filename, ua, referer, cookies, noCheckCert, singleSegment } = download.config;
+  let { retryCount } = download;
+  const isVideo = isVideoPlatform(url);
+
+  download.info.status = 'downloading';
+  download.info.startedAt = new Date().toISOString();
+  broadcast({ type: "status-change", download: download.info });
+
+  log('INFO', `Démarrage téléchargement: ${filename} (Retry: ${retryCount})`, {
+    url: url.substring(0, 100),
+    type: isVideo ? 'video' : url.match(/\.(m3u8|mpd)/i) ? 'stream' : 'direct'
+  });
+
+  let proc;
+  let lastError = "";
+  const isRetry = retryCount > 0;
+
+  if (isVideo) {
+    // YT-DLP pour plateformes vidéo
+    log('INFO', `Utilisation de yt-dlp${isRetry ? ' (retry ' + retryCount + ')' : ''}`);
+
+    const ytArgs = [
+      "--newline",
+      "--no-playlist",
+      "--format", "bestvideo+bestaudio/best",
+      "--merge-output-format", "mp4",
+      "--output", path.join(downloadsDir, `${filename}.mp4`),
+      url
+    ];
+
+    if (cookies) ytArgs.push("--add-header", `Cookie: ${cookies}`);
+    if (noCheckCert) ytArgs.push("--no-check-certificate");
+
+    proc = spawn("yt-dlp", ytArgs);
+
+    proc.stdout.on("data", d => {
+      const line = d.toString();
+
+      const progress = line.match(/(\d+\.?\d*)%/);
+      const size = line.match(/of\s+(~?[0-9.]+[KMGTiB]+)/);
+      const speed = line.match(/at\s+([0-9.]+[KMGTiB]+\/s)/);
+      const eta = line.match(/ETA\s+([0-9:]+)/);
+
+      if (progress) {
+        download.info.progress = Math.min(100, Math.floor(parseFloat(progress[1])));
+        if (size) download.info.fullSize = size[1];
+        if (speed) download.info.speed = speed[1];
+        if (eta) download.info.eta = eta[1];
+
+        broadcast({ type: "update", download: download.info });
+      }
+    });
+
+    proc.stderr.on("data", d => {
+      lastError += d.toString();
+    });
+
+  } else if (url.match(/\.(m3u8|mpd)/i)) {
+    // FFMPEG pour streams
+    log('INFO', `Utilisation de ffmpeg${isRetry ? ' (retry ' + retryCount + ')' : ''}`);
+
+    const ffmpegArgs = [
+      "-headers", `User-Agent: ${defaultUA(ua)}\r\n`,
+      "-i", url,
+      "-c", "copy",
+      "-bsf:a", "aac_adtstoasc",
+      path.join(downloadsDir, `${filename}.mp4`)
+    ];
+
+    proc = spawn("ffmpeg", ffmpegArgs);
+
+    proc.stderr.on("data", d => {
+      const line = d.toString();
+      const timeMatch = line.match(/time=(\d+):(\d+):(\d+)/);
+
+      if (timeMatch) {
+        const hours = parseInt(timeMatch[1]);
+        const minutes = parseInt(timeMatch[2]);
+        const seconds = parseInt(timeMatch[3]);
+        const totalSeconds = hours * 3600 + minutes * 60 + seconds;
+
+        download.info.eta = `${totalSeconds}s encodées`;
+        download.info.progress = Math.min(99, Math.floor(totalSeconds / 10));
+        broadcast({ type: "update", download: download.info });
+      }
+
+      lastError += line;
+    });
+
+  } else {
+    // ARIA2C pour téléchargements directs
+    log('INFO', `Utilisation d'aria2c${isRetry ? ' (retry ' + retryCount + ')' : ''}`);
+
+    const args = [
+      "--console-log-level=notice",
+      "--summary-interval=1",
+      "--dir", downloadsDir,
+      "--out", filename,
+      "--user-agent", defaultUA(ua),
+      "--max-tries", "5",
+      "--retry-wait", "3"
+    ];
+
+    if (referer) args.push("--referer", referer);
+
+    if (isVideo || isRetry || singleSegment) {
+      args.push("--max-connection-per-server=1", "--split=1");
+    } else {
+      args.push("--max-connection-per-server=16", "--split=16");
+    }
+
+    if (cookies) args.push("--header", `Cookie: ${cookies}`);
+    if (noCheckCert) args.push("--check-certificate=false");
+    // if (MAX_FILE_SIZE) args.push("--max-download-limit", MAX_FILE_SIZE); // Option erronée: limite la vitesse, pas la taille
+
+    args.push(url);
+    proc = spawn("aria2c", args);
+
+    proc.stdout.on("data", d => {
+      const line = d.toString();
+
+      // Parser aria2c output
+      const progressMatch = line.match(/\[#\d+\s+([^\s]+)\/([^\s]+)\((\d+)%\)\s+CN:(\d+)\s+DL:([^\s]+)\s+ETA:([^\]]+)\]/);
+
+      if (progressMatch) {
+        download.info.currentSize = progressMatch[1];
+        download.info.fullSize = progressMatch[2];
+        download.info.progress = parseInt(progressMatch[3]);
+        download.info.speed = progressMatch[5] + "/s";
+        download.info.eta = progressMatch[6];
+        broadcast({ type: "update", download: download.info });
+      } else {
+        const simpleProgress = line.match(/\((\d+)%\)/);
+        if (simpleProgress) {
+          download.info.progress = parseInt(simpleProgress[1]);
+          broadcast({ type: "update", download: download.info });
+        }
+      }
+    });
+
+    proc.stderr.on("data", d => {
+      lastError += d.toString();
+    });
+  }
+
+  // Update process ref
+  download.process = proc;
+
+  // Timeout de sécurité
+  const timeout = setTimeout(() => {
+    if (proc) {
+      log('WARN', `Timeout atteint pour: ${filename}`);
+      proc.kill("SIGTERM");
+    }
+  }, DOWNLOAD_TIMEOUT * 1000);
+
+  proc.on("close", code => {
+    clearTimeout(timeout);
+
+    if (code === 0) {
+      download.info.status = "completed";
+      download.info.progress = 100;
+      download.info.completedAt = new Date().toISOString();
+      log('SUCCESS', `Téléchargement terminé: ${filename}`, {
+        size: download.info.fullSize
+      });
+
+      activeDownloads.delete(id);
+      broadcast({ type: "status-change", download: download.info });
+      processQueue(); // Trigger next
+    } else {
+      // Vérifier si retry nécessaire
+      const shouldRetry = download.retryCount < RETRY_ATTEMPTS && (
+        lastError.includes("503") ||
+        lastError.includes("Connection") ||
+        lastError.includes("timeout") ||
+        lastError.includes("SSL") ||
+        code === 3 || code === 7
+      );
+
+      if (shouldRetry) {
+        download.retryCount++;
+        log('WARN', `Retry automatique ${download.retryCount}/${RETRY_ATTEMPTS} dans ${RETRY_DELAY / 1000}s: ${filename}`);
+        download.info.status = "retrying";
+        broadcast({ type: "update", download: download.info });
+
+        setTimeout(() => startDownload(id), RETRY_DELAY);
+        return;
+      }
+
+      download.info.status = "error";
+      const errorLines = lastError.split("\n").filter(l =>
+        l.toLowerCase().includes("error") || l.toLowerCase().includes("failed")
+      );
+      download.info.error = errorLines.length > 0
+        ? errorLines[0].substring(0, 200)
+        : `Échec (code ${code})`;
+
+      log('ERROR', `Téléchargement échoué: ${filename}`, {
+        error: download.info.error,
+        code,
+        retries: retryCount
+      });
+    }
+
+    broadcast({ type: "status-change", download: download.info });
+    activeDownloads.delete(id);
+  });
+
+  proc.on("error", err => {
+    log('ERROR', `Erreur processus: ${filename}`, { error: err.message });
+    download.info.status = "error";
+    download.info.error = err.message;
+    broadcast({ type: "status-change", download: download.info });
+    activeDownloads.delete(id);
+    processQueue();
+  });
+}
 
 // ================= DOWNLOAD HANDLER =================
 app.post("/download", async (req, res) => {
   const { url, referer, ua, noCheckCert, customFilename, singleSegment, cookies } = req.body;
-  
+
   // Validation basique
   if (!url) {
     return res.status(400).json({ error: "URL manquante" });
@@ -382,11 +634,36 @@ app.post("/download", async (req, res) => {
     return res.status(403).json({ error: `Domaine non autorisé: ${hostname}` });
   }
 
-  // Vérifier limite téléchargements
-  if (activeDownloads.size >= MAX_CONCURRENT_DOWNLOADS) {
-    return res.status(429).json({
-      error: `Limite atteinte (${MAX_CONCURRENT_DOWNLOADS} téléchargements max). Veuillez patienter.`
-    });
+  // Vérification espace disque (uniquement pour fichiers directs)
+  if (!isVideoPlatform(url) && !url.match(/\.(m3u8|mpd)/i)) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+      const headRes = await fetch(url, {
+        method: 'HEAD',
+        headers: { 'User-Agent': defaultUA(ua) },
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      const contentLength = headRes.headers.get('content-length');
+
+      if (contentLength) {
+        const bytesNeeded = parseInt(contentLength);
+        const stats = await fs.statfs(downloadsDir);
+        const bytesAvailable = stats.bavail * stats.bsize;
+
+        if (bytesAvailable < bytesNeeded) {
+          log('WARN', `Espace disque insuffisant: ${formatSize(bytesNeeded)} requis, ${formatSize(bytesAvailable)} dispo`);
+          return res.status(507).json({
+            error: `Espace disque insuffisant. Requis: ${formatSize(bytesNeeded)}, Disponible: ${formatSize(bytesAvailable)}`
+          });
+        }
+      }
+    } catch (e) {
+      log('WARN', 'Impossible de vérifier la taille du fichier (skip)', { error: e.message });
+    }
   }
 
   const id = uuidv4();
@@ -394,252 +671,68 @@ app.post("/download", async (req, res) => {
   const isYouTube = url.includes("googlevideo.com") || url.includes("youtube.com");
 
   // Générer nom de fichier sécurisé
-  const baseName = customFilename?.trim() 
+  const baseName = customFilename?.trim()
     ? sanitizeFilename(customFilename)
     : sanitizeFilename(path.basename(url).split("?")[0]) || "download";
-  
+
   const filename = customFilename?.trim() ? baseName : `${timestamp}_${baseName}`;
 
   const downloadInfo = {
     id,
     url,
     filename,
-    status: "downloading",
+    status: "queued",
     progress: 0,
     speed: "0 KB/s",
     eta: "--",
     currentSize: "0 B",
     fullSize: "???",
-    startedAt: new Date().toISOString()
+    startedAt: null
   };
 
-  log('INFO', `Nouveau téléchargement: ${filename}`, { 
+  const downloadConfig = {
+    url, referer, ua, noCheckCert, customFilename, singleSegment, cookies, filename
+  };
+
+  log('INFO', `Nouveau téléchargement en file d'attente: ${filename}`, {
     url: url.substring(0, 100),
     type: isVideoPlatform(url) ? 'video' : url.match(/\.(m3u8|mpd)/i) ? 'stream' : 'direct'
   });
 
-  // Fonction principale de lancement
-  function launch(retryCount = 0) {
-    let proc;
-    let lastError = "";
-    const isRetry = retryCount > 0;
+  // Stocker le processus
+  activeDownloads.set(id, { info: downloadInfo, config: downloadConfig, process: null, retryCount: 0 });
+  downloadQueue.push(id);
 
-    if (isVideoPlatform(url)) {
-      // YT-DLP pour plateformes vidéo
-      log('INFO', `Utilisation de yt-dlp${isRetry ? ' (retry ' + retryCount + ')' : ''}`);
-      
-      const ytArgs = [
-        "--newline",
-        "--no-playlist",
-        "--format", "bestvideo+bestaudio/best",
-        "--merge-output-format", "mp4",
-        "--output", path.join(downloadsDir, `${filename}.mp4`),
-        url
-      ];
-      
-      if (cookies) ytArgs.push("--add-header", `Cookie: ${cookies}`);
-      if (noCheckCert) ytArgs.push("--no-check-certificate");
-      
-      proc = spawn("yt-dlp", ytArgs);
+  broadcast({ type: "update", download: downloadInfo });
+  processQueue(); // Tenter de démarrer si slot libre
 
-      proc.stdout.on("data", d => {
-        const line = d.toString();
-        
-        const progress = line.match(/(\d+\.?\d*)%/);
-        const size = line.match(/of\s+(~?[0-9.]+[KMGTiB]+)/);
-        const speed = line.match(/at\s+([0-9.]+[KMGTiB]+\/s)/);
-        const eta = line.match(/ETA\s+([0-9:]+)/);
-
-        if (progress) {
-          downloadInfo.progress = Math.min(100, Math.floor(parseFloat(progress[1])));
-          if (size) downloadInfo.fullSize = size[1];
-          if (speed) downloadInfo.speed = speed[1];
-          if (eta) downloadInfo.eta = eta[1];
-          
-          broadcast({ type: "update", download: downloadInfo });
-        }
-      });
-
-      proc.stderr.on("data", d => {
-        lastError += d.toString();
-      });
-
-    } else if (url.match(/\.(m3u8|mpd)/i)) {
-      // FFMPEG pour streams
-      log('INFO', `Utilisation de ffmpeg${isRetry ? ' (retry ' + retryCount + ')' : ''}`);
-      
-      const ffmpegArgs = [
-        "-headers", `User-Agent: ${defaultUA(ua)}\r\n`,
-        "-i", url,
-        "-c", "copy",
-        "-bsf:a", "aac_adtstoasc",
-        path.join(downloadsDir, `${filename}.mp4`)
-      ];
-      
-      proc = spawn("ffmpeg", ffmpegArgs);
-
-      proc.stderr.on("data", d => {
-        const line = d.toString();
-        const timeMatch = line.match(/time=(\d+):(\d+):(\d+)/);
-        
-        if (timeMatch) {
-          const hours = parseInt(timeMatch[1]);
-          const minutes = parseInt(timeMatch[2]);
-          const seconds = parseInt(timeMatch[3]);
-          const totalSeconds = hours * 3600 + minutes * 60 + seconds;
-          
-          downloadInfo.eta = `${totalSeconds}s encodées`;
-          downloadInfo.progress = Math.min(99, Math.floor(totalSeconds / 10));
-          broadcast({ type: "update", download: downloadInfo });
-        }
-        
-        lastError += line;
-      });
-
-    } else {
-      // ARIA2C pour téléchargements directs
-      log('INFO', `Utilisation d'aria2c${isRetry ? ' (retry ' + retryCount + ')' : ''}`);
-      
-      const args = [
-        "--console-log-level=notice",
-        "--summary-interval=1",
-        "--dir", downloadsDir,
-        "--out", filename,
-        "--user-agent", defaultUA(ua),
-        "--max-tries", "5",
-        "--retry-wait", "3"
-      ];
-
-      if (referer) args.push("--referer", referer);
-      
-      if (isYouTube || isRetry || singleSegment) {
-        args.push("--max-connection-per-server=1", "--split=1");
-      } else {
-        args.push("--max-connection-per-server=16", "--split=16");
-      }
-      
-      if (cookies) args.push("--header", `Cookie: ${cookies}`);
-      if (noCheckCert) args.push("--check-certificate=false");
-      if (MAX_FILE_SIZE) args.push("--max-download-limit", MAX_FILE_SIZE);
-
-      args.push(url);
-      proc = spawn("aria2c", args);
-
-      proc.stdout.on("data", d => {
-        const line = d.toString();
-
-        // Parser aria2c output
-        const progressMatch = line.match(/\[#\d+\s+([^\s]+)\/([^\s]+)\((\d+)%\)\s+CN:(\d+)\s+DL:([^\s]+)\s+ETA:([^\]]+)\]/);
-        
-        if (progressMatch) {
-          downloadInfo.currentSize = progressMatch[1];
-          downloadInfo.fullSize = progressMatch[2];
-          downloadInfo.progress = parseInt(progressMatch[3]);
-          downloadInfo.speed = progressMatch[5] + "/s";
-          downloadInfo.eta = progressMatch[6];
-          broadcast({ type: "update", download: downloadInfo });
-        } else {
-          const simpleProgress = line.match(/\((\d+)%\)/);
-          if (simpleProgress) {
-            downloadInfo.progress = parseInt(simpleProgress[1]);
-            broadcast({ type: "update", download: downloadInfo });
-          }
-        }
-      });
-
-      proc.stderr.on("data", d => {
-        lastError += d.toString();
-      });
-    }
-
-    // Stocker le processus
-    activeDownloads.set(id, { info: downloadInfo, process: proc, retryCount });
-
-    // Timeout de sécurité
-    const timeout = setTimeout(() => {
-      if (proc) {
-        log('WARN', `Timeout atteint pour: ${filename}`);
-        proc.kill("SIGTERM");
-      }
-    }, DOWNLOAD_TIMEOUT * 1000);
-
-    proc.on("close", code => {
-      clearTimeout(timeout);
-      
-      if (code === 0) {
-        downloadInfo.status = "completed";
-        downloadInfo.progress = 100;
-        downloadInfo.completedAt = new Date().toISOString();
-        log('SUCCESS', `Téléchargement terminé: ${filename}`, { 
-          size: downloadInfo.fullSize,
-          duration: Math.round((Date.now() - timestamp) / 1000) + 's'
-        });
-      } else {
-        // Vérifier si retry nécessaire
-        const shouldRetry = retryCount < RETRY_ATTEMPTS && (
-          lastError.includes("503") ||
-          lastError.includes("Connection") ||
-          lastError.includes("timeout") ||
-          lastError.includes("SSL") ||
-          code === 3 || code === 7
-        );
-
-        if (shouldRetry) {
-          log('WARN', `Retry automatique ${retryCount + 1}/${RETRY_ATTEMPTS} dans ${RETRY_DELAY/1000}s: ${filename}`);
-          downloadInfo.status = "retrying";
-          broadcast({ type: "update", download: downloadInfo });
-          
-          setTimeout(() => launch(retryCount + 1), RETRY_DELAY);
-          return;
-        }
-
-        downloadInfo.status = "error";
-        const errorLines = lastError.split("\n").filter(l => 
-          l.toLowerCase().includes("error") || l.toLowerCase().includes("failed")
-        );
-        downloadInfo.error = errorLines.length > 0
-          ? errorLines[0].substring(0, 200)
-          : `Échec (code ${code})`;
-        
-        log('ERROR', `Téléchargement échoué: ${filename}`, { 
-          error: downloadInfo.error,
-          code,
-          retries: retryCount
-        });
-      }
-      
-      broadcast({ type: "status-change", download: downloadInfo });
-      activeDownloads.delete(id);
-    });
-
-    proc.on("error", err => {
-      log('ERROR', `Erreur processus: ${filename}`, { error: err.message });
-      downloadInfo.status = "error";
-      downloadInfo.error = err.message;
-      broadcast({ type: "status-change", download: downloadInfo });
-      activeDownloads.delete(id);
-    });
-  }
-
-  launch();
-  res.json({ 
-    id, 
-    filename, 
-    message: "Téléchargement démarré",
-    status: "downloading"
+  res.json({
+    id,
+    filename,
+    message: "Téléchargement ajouté à la file d'attente",
+    status: "queued",
+    queuePosition: downloadQueue.length
   });
 });
 
 // ================= STARTUP =================
+let server;
+
 async function startServer() {
   try {
     await ensureDirectories();
     await loadState();
-    
-    app.listen(PORT, () => {
+
+    server = app.listen(PORT, () => {
       log('SUCCESS', `Serveur démarré sur le port ${PORT}`);
       log('INFO', `Configuration: ${MAX_CONCURRENT_DOWNLOADS} téléchargements max, ${ALLOWED_DOMAINS.length > 0 ? ALLOWED_DOMAINS.length + ' domaines autorisés' : 'tous domaines autorisés'}`);
     });
+
+    server.on('error', (err) => {
+      log('ERROR', 'Erreur critique du serveur HTTP', { error: err.message });
+      process.exit(1);
+    });
+
   } catch (err) {
     log('ERROR', 'Erreur démarrage serveur', { error: err.message });
     process.exit(1);
@@ -647,16 +740,20 @@ async function startServer() {
 }
 
 // Gestion arrêt gracieux
-process.on('SIGTERM', async () => {
-  log('INFO', 'Signal SIGTERM reçu, arrêt gracieux...');
-  await saveState();
-  process.exit(0);
-});
+async function gracefulShutdown(signal) {
+  log('INFO', `Signal ${signal} reçu, arrêt gracieux...`);
 
-process.on('SIGINT', async () => {
-  log('INFO', 'Signal SIGINT reçu, arrêt gracieux...');
+  if (server) {
+    server.close(() => {
+      log('INFO', 'Serveur HTTP fermé');
+    });
+  }
+
   await saveState();
   process.exit(0);
-});
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 startServer();

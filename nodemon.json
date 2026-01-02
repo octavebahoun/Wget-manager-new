@@ -1,0 +1,8 @@
+{
+  "ignore": [
+    "downloads/*",
+    "server.log",
+    "active_downloads.json",
+    "*.log"
+  ]
+}

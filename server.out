@@ -1,0 +1,255 @@
+
+> web-wget@1.0.0 dev
+> nodemon server.js
+
+[33m[nodemon] 3.1.11[39m
+[33m[nodemon] to restart at any time, enter `rs`[39m
+[33m[nodemon] watching path(s): *.*[39m
+[33m[nodemon] watching extensions: js,mjs,cjs,json[39m
+[32m[nodemon] starting `node server.js`[39m
+[dotenv@17.2.3] injecting env (1) from .env -- tip: ⚙️  load multiple .env files with { path: ['.env.local', '.env'] }
+2026-01-02 10:55:03 [32m[SUCCESS][0m Serveur démarré sur le port 3000
+2026-01-02 10:55:03 [36m[INFO][0m Configuration: 5 téléchargements max, tous domaines autorisés
+[DEBUG_REQ] GET /health
+[32m[nodemon] restarting child process[39m
+[32m[nodemon] starting `node server.js`[39m
+[dotenv@17.2.3] injecting env (1) from .env -- tip: 🔑 add access controls to secrets: https://dotenvx.com/ops
+2026-01-02 11:03:41 [32m[SUCCESS][0m Serveur démarré sur le port 3000
+2026-01-02 11:03:41 [36m[INFO][0m Configuration: 5 téléchargements max, tous domaines autorisés
+[DEBUG_REQ] POST /download
+2026-01-02 12:55:30 [36m[INFO][0m Nouveau téléchargement en file d'attente: Application_React
+  ↳ { url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ', type: 'video' }
+2026-01-02 12:55:30 [36m[INFO][0m Dépilement file d'attente: démarrrage de cf7a65db-9cbf-4881-91c7-7cf076400c15
+2026-01-02 12:55:31 [36m[INFO][0m Démarrage téléchargement: Application_React (Retry: 0)
+  ↳ { url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ', type: 'video' }
+2026-01-02 12:55:31 [36m[INFO][0m Utilisation de yt-dlp
+[DEBUG_REQ] GET /
+[DEBUG_REQ] GET /style.css
+[DEBUG_REQ] GET /app.js
+[DEBUG_REQ] GET /config
+[DEBUG_REQ] GET /history
+[DEBUG_REQ] GET /events
+[DEBUG_REQ] POST /download
+2026-01-02 12:56:41 [36m[INFO][0m Nouveau téléchargement en file d'attente: _177__Big_Buck_Bunny_60fps_4K_-_Official_Blender_Foundation_Short_Film_-_YouTube
+  ↳ {
+  url: 'https://rr4---sn-25glenld.googlevideo.com/videoplayback?expire=1767380144&ei=UMBXaYeVBuCPi9oP0aPQSA&',
+  type: 'direct'
+}
+2026-01-02 12:56:41 [36m[INFO][0m Dépilement file d'attente: démarrrage de 9b10b8f8-0723-4ba5-aa1e-819fbf8451f6
+2026-01-02 12:56:41 [36m[INFO][0m Démarrage téléchargement: _177__Big_Buck_Bunny_60fps_4K_-_Official_Blender_Foundation_Short_Film_-_YouTube (Retry: 0)
+  ↳ {
+  url: 'https://rr4---sn-25glenld.googlevideo.com/videoplayback?expire=1767380144&ei=UMBXaYeVBuCPi9oP0aPQSA&',
+  type: 'direct'
+}
+2026-01-02 12:56:41 [36m[INFO][0m Utilisation d'aria2c
+2026-01-02 12:56:43 [32m[SUCCESS][0m Téléchargement terminé: _177__Big_Buck_Bunny_60fps_4K_-_Official_Blender_Foundation_Short_Film_-_YouTube
+  ↳ { size: '???' }
+[DEBUG_REQ] GET /history
+[DEBUG_REQ] GET /history
+[DEBUG_REQ] POST /download
+2026-01-02 12:57:30 [36m[INFO][0m Nouveau téléchargement en file d'attente: _177__Black_Clover_Openings_1-10__HD__-_YouTube
+  ↳ {
+  url: 'https://rr3---sn-25glenlr.googlevideo.com/videoplayback?expire=1767380231&ei=p8BXabjxBeu9zPsPyOaIOA&',
+  type: 'direct'
+}
+2026-01-02 12:57:30 [36m[INFO][0m Dépilement file d'attente: démarrrage de 05a2f836-2221-4df8-a61e-5da7dcc59890
+2026-01-02 12:57:30 [36m[INFO][0m Démarrage téléchargement: _177__Black_Clover_Openings_1-10__HD__-_YouTube (Retry: 0)
+  ↳ {
+  url: 'https://rr3---sn-25glenlr.googlevideo.com/videoplayback?expire=1767380231&ei=p8BXabjxBeu9zPsPyOaIOA&',
+  type: 'direct'
+}
+2026-01-02 12:57:30 [36m[INFO][0m Utilisation d'aria2c
+2026-01-02 12:57:31 [32m[SUCCESS][0m Téléchargement terminé: _177__Black_Clover_Openings_1-10__HD__-_YouTube
+  ↳ { size: '???' }
+[DEBUG_REQ] GET /history
+[DEBUG_REQ] GET /history
+[DEBUG_REQ] POST /cancel
+2026-01-02 12:57:38 [36m[INFO][0m Demande d'annulation pour: cf7a65db-9cbf-4881-91c7-7cf076400c15
+2026-01-02 12:57:38 [32m[SUCCESS][0m Téléchargement annulé: Application_React
+2026-01-02 12:57:38 [31m[ERROR][0m Téléchargement échoué: Application_React
+  ↳ { error: 'Échec (code null)', code: null, retries: 0 }
+[DEBUG_REQ] GET /favicon.ico
+[DEBUG_REQ] GET /history
+[DEBUG_REQ] POST /download
+2026-01-02 12:58:03 [36m[INFO][0m Nouveau téléchargement en file d'attente: blac
+  ↳ {
+  url: 'https://rr3---sn-25glenlr.googlevideo.com/videoplayback?expire=1767380231&ei=p8BXabjxBeu9zPsPyOaIOA&',
+  type: 'direct'
+}
+2026-01-02 12:58:03 [36m[INFO][0m Dépilement file d'attente: démarrrage de c84192b4-b07a-41d0-b6af-8e8988649565
+2026-01-02 12:58:03 [36m[INFO][0m Démarrage téléchargement: blac (Retry: 0)
+  ↳ {
+  url: 'https://rr3---sn-25glenlr.googlevideo.com/videoplayback?expire=1767380231&ei=p8BXabjxBeu9zPsPyOaIOA&',
+  type: 'direct'
+}
+2026-01-02 12:58:03 [36m[INFO][0m Utilisation d'aria2c
+2026-01-02 12:58:04 [32m[SUCCESS][0m Téléchargement terminé: blac
+  ↳ { size: '???' }
+[DEBUG_REQ] GET /history
+[DEBUG_REQ] GET /history
+[DEBUG_REQ] POST /download
+2026-01-02 12:58:34 [36m[INFO][0m Nouveau téléchargement en file d'attente: _177__Black_Clover_Openings_1-10__HD__-_YouTube
+  ↳ {
+  url: 'https://youtu.be/56A5aPJUE5Y?list=RD56A5aPJUE5Y',
+  type: 'video'
+}
+2026-01-02 12:58:34 [36m[INFO][0m Dépilement file d'attente: démarrrage de a621d304-0682-4f56-aad3-3bfe74cc4f38
+2026-01-02 12:58:34 [36m[INFO][0m Démarrage téléchargement: _177__Black_Clover_Openings_1-10__HD__-_YouTube (Retry: 0)
+  ↳ {
+  url: 'https://youtu.be/56A5aPJUE5Y?list=RD56A5aPJUE5Y',
+  type: 'video'
+}
+2026-01-02 12:58:34 [36m[INFO][0m Utilisation de yt-dlp
+[DEBUG_REQ] GET /
+[DEBUG_REQ] GET /style.css
+[DEBUG_REQ] GET /app.js
+[DEBUG_REQ] GET /config
+[DEBUG_REQ] POST /download
+2026-01-02 13:07:05 [36m[INFO][0m Nouveau téléchargement en file d'attente: 1767359225995_niVg6znPXsU
+  ↳ {
+  url: 'https://youtu.be/niVg6znPXsU?list=RDniVg6znPXsU',
+  type: 'video'
+}
+2026-01-02 13:07:06 [36m[INFO][0m Dépilement file d'attente: démarrrage de 35a03b56-9eda-4d60-9615-42b0d0df7ae4
+2026-01-02 13:07:06 [36m[INFO][0m Démarrage téléchargement: 1767359225995_niVg6znPXsU (Retry: 0)
+  ↳ {
+  url: 'https://youtu.be/niVg6znPXsU?list=RDniVg6znPXsU',
+  type: 'video'
+}
+2026-01-02 13:07:06 [36m[INFO][0m Utilisation de yt-dlp
+[DEBUG_REQ] POST /cancel
+2026-01-02 13:07:19 [36m[INFO][0m Demande d'annulation pour: 35a03b56-9eda-4d60-9615-42b0d0df7ae4
+2026-01-02 13:07:19 [32m[SUCCESS][0m Téléchargement annulé: 1767359225995_niVg6znPXsU
+2026-01-02 13:07:19 [31m[ERROR][0m Téléchargement échoué: 1767359225995_niVg6znPXsU
+  ↳ { error: 'Échec (code null)', code: null, retries: 0 }
+[DEBUG_REQ] POST /download
+2026-01-02 13:07:32 [36m[INFO][0m Nouveau téléchargement en file d'attente: ohinoai
+  ↳ {
+  url: 'https://youtu.be/niVg6znPXsU?list=RDniVg6znPXsU',
+  type: 'video'
+}
+2026-01-02 13:07:32 [36m[INFO][0m Dépilement file d'attente: démarrrage de 39b79991-178f-49a2-bfc5-a5692613a11d
+2026-01-02 13:07:32 [36m[INFO][0m Démarrage téléchargement: ohinoai (Retry: 0)
+  ↳ {
+  url: 'https://youtu.be/niVg6znPXsU?list=RDniVg6znPXsU',
+  type: 'video'
+}
+2026-01-02 13:07:32 [36m[INFO][0m Utilisation de yt-dlp
+2026-01-02 13:08:18 [32m[SUCCESS][0m Téléchargement terminé: ohinoai
+  ↳ { size: '2.79MiB' }
+[DEBUG_REQ] GET /history
+[DEBUG_REQ] GET /history
+2026-01-02 13:10:59 [32m[SUCCESS][0m Téléchargement terminé: _177__Black_Clover_Openings_1-10__HD__-_YouTube
+  ↳ { size: '312.46MiB' }
+[DEBUG_REQ] GET /history
+[DEBUG_REQ] GET /history
+[DEBUG_REQ] POST /download
+2026-01-02 13:12:05 [36m[INFO][0m Nouveau téléchargement en file d'attente: Souf_Ca_c_est_fai
+  ↳ {
+  url: 'https://youtu.be/byBI_GmWTCM?list=RDbyBI_GmWTCM',
+  type: 'video'
+}
+2026-01-02 13:12:05 [36m[INFO][0m Dépilement file d'attente: démarrrage de b28c8dac-6036-43b0-957e-775c65ae7334
+2026-01-02 13:12:05 [36m[INFO][0m Démarrage téléchargement: Souf_Ca_c_est_fai (Retry: 0)
+  ↳ {
+  url: 'https://youtu.be/byBI_GmWTCM?list=RDbyBI_GmWTCM',
+  type: 'video'
+}
+2026-01-02 13:12:05 [36m[INFO][0m Utilisation de yt-dlp
+2026-01-02 13:13:37 [32m[SUCCESS][0m Téléchargement terminé: Souf_Ca_c_est_fai
+  ↳ { size: '55.43MiB' }
+[DEBUG_REQ] GET /history
+[DEBUG_REQ] GET /history
+[DEBUG_REQ] POST /download
+2026-01-02 13:29:56 [36m[INFO][0m Nouveau téléchargement en file d'attente: _177__Wejdene_-_Coco__Clip_Officiel__-_YouTube
+  ↳ {
+  url: 'https://rr5---sn-25glenlk.googlevideo.com/videoplayback?expire=1767382068&ei=1MdXaaH7F96LvdIPh6je2Q8',
+  type: 'direct'
+}
+2026-01-02 13:29:56 [36m[INFO][0m Dépilement file d'attente: démarrrage de 9dbe5c44-7bf6-4b5a-9810-ddc0f9e7c59c
+2026-01-02 13:29:56 [36m[INFO][0m Démarrage téléchargement: _177__Wejdene_-_Coco__Clip_Officiel__-_YouTube (Retry: 0)
+  ↳ {
+  url: 'https://rr5---sn-25glenlk.googlevideo.com/videoplayback?expire=1767382068&ei=1MdXaaH7F96LvdIPh6je2Q8',
+  type: 'direct'
+}
+2026-01-02 13:29:56 [36m[INFO][0m Utilisation d'aria2c
+2026-01-02 13:29:57 [32m[SUCCESS][0m Téléchargement terminé: _177__Wejdene_-_Coco__Clip_Officiel__-_YouTube
+  ↳ { size: '???' }
+[DEBUG_REQ] GET /history
+[DEBUG_REQ] GET /history
+[DEBUG_REQ] POST /download
+2026-01-02 13:43:26 [36m[INFO][0m Nouveau téléchargement en file d'attente: Original_opening_sung_jiwoo
+  ↳ {
+  url: 'https://youtu.be/oe4XJ851oOk?list=RDIl0S8BoucSA',
+  type: 'video'
+}
+2026-01-02 13:43:26 [36m[INFO][0m Dépilement file d'attente: démarrrage de c1e4fc99-4bb7-4bd5-918b-905fecaa8fac
+2026-01-02 13:43:26 [36m[INFO][0m Démarrage téléchargement: Original_opening_sung_jiwoo (Retry: 0)
+  ↳ {
+  url: 'https://youtu.be/oe4XJ851oOk?list=RDIl0S8BoucSA',
+  type: 'video'
+}
+2026-01-02 13:43:26 [36m[INFO][0m Utilisation de yt-dlp
+2026-01-02 13:45:16 [32m[SUCCESS][0m Téléchargement terminé: Original_opening_sung_jiwoo
+  ↳ { size: '2.83MiB' }
+[DEBUG_REQ] GET /history
+[DEBUG_REQ] GET /history
+[DEBUG_REQ] POST /download
+2026-01-02 14:09:50 [36m[INFO][0m Nouveau téléchargement en file d'attente: reine_des_neiges
+  ↳ {
+  url: 'https://youtu.be/vzgInDxzyGU?list=RDvzgInDxzyGU',
+  type: 'video'
+}
+2026-01-02 14:09:50 [36m[INFO][0m Dépilement file d'attente: démarrrage de e5db29ff-34c4-4999-8402-5ca78293616a
+2026-01-02 14:09:50 [36m[INFO][0m Démarrage téléchargement: reine_des_neiges (Retry: 0)
+  ↳ {
+  url: 'https://youtu.be/vzgInDxzyGU?list=RDvzgInDxzyGU',
+  type: 'video'
+}
+2026-01-02 14:09:50 [36m[INFO][0m Utilisation de yt-dlp
+2026-01-02 14:10:46 [32m[SUCCESS][0m Téléchargement terminé: reine_des_neiges
+  ↳ { size: '3.64MiB' }
+[DEBUG_REQ] GET /history
+[DEBUG_REQ] GET /history
+2026-01-02 14:10:47 [36m[INFO][0m Signal SIGTERM reçu, arrêt gracieux...
+
+  #  Node.js[96084]: void node::ResetStdio() at ../src/node.cc:751
+  #  Assertion failed: !(err != 0) || (err == -1 && (*__errno_location ()) == 1)
+
+----- Native stack trace -----
+
+ 1: 0xcb3007 node::Assert(node::AssertionInfo const&) [node]
+ 2: 0xc5f924  [node]
+ 3: 0x70fe87847a76  [/lib/x86_64-linux-gnu/libc.so.6]
+ 4: 0x70fe87847bbe  [/lib/x86_64-linux-gnu/libc.so.6]
+ 5: 0xbbf62f node::DefaultProcessExitHandlerInternal(node::Environment*, node::ExitCode) [node]
+ 6: 0xc1ef0f node::Environment::Exit(node::ExitCode) [node]
+ 7: 0xf4e54f v8::internal::FunctionCallbackArguments::Call(v8::internal::CallHandlerInfo) [node]
+ 8: 0xf4edbd  [node]
+ 9: 0xf4f285 v8::internal::Builtin_HandleApiCall(int, unsigned long*, v8::internal::Isolate*) [node]
+10: 0x1959df6  [node]
+
+  #  Node.js[96084]: void node::ResetStdio() at ../src/node.cc:751
+  #  Assertion failed: !(err != 0) || (err == -1 && (*__errno_location ()) == 1)
+
+----- Native stack trace -----
+
+ 1: 0xcb3007 node::Assert(node::AssertionInfo const&) [node]
+ 2: 0xc5f924  [node]
+ 3: 0xc5ff3d node::TrapWebAssemblyOrContinue(int, siginfo_t*, void*) [node]
+ 4: 0x70fe87845330  [/lib/x86_64-linux-gnu/libc.so.6]
+ 5: 0x1589970 v8::internal::tracing::TraceEventHelper::GetTracingController() [node]
+ 6: 0x1060555 v8::internal::Isolate::CaptureDetailedStackTrace(int, v8::StackTrace::StackTraceOptions) [node]
+ 7: 0xeeee70 v8::StackTrace::CurrentStackTrace(v8::Isolate*, int, v8::StackTrace::StackTraceOptions) [node]
+ 8: 0xcb2f66 node::GetCurrentStackTrace(v8::Isolate*, int) [node]
+ 9: 0xbffbbb node::DumpJavaScriptBacktrace(_IO_FILE*) [node]
+10: 0xcb3013 node::Assert(node::AssertionInfo const&) [node]
+11: 0xc5f924  [node]
+12: 0x70fe87847a76  [/lib/x86_64-linux-gnu/libc.so.6]
+13: 0x70fe87847bbe  [/lib/x86_64-linux-gnu/libc.so.6]
+14: 0xbbf62f node::DefaultProcessExitHandlerInternal(node::Environment*, node::ExitCode) [node]
+15: 0xc1ef0f node::Environment::Exit(node::ExitCode) [node]
+16: 0xf4e54f v8::internal::FunctionCallbackArguments::Call(v8::internal::CallHandlerInfo) [node]
+17: 0xf4edbd  [node]
+18: 0xf4f285 v8::internal::Builtin_HandleApiCall(int, unsigned long*, v8::internal::Isolate*) [node]
+19: 0x1959df6  [node]

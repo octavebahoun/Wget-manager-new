@@ -85,7 +85,7 @@ function showStatus(message, type = STATUS_TYPES.INFO, duration = null) {
 // Nettoyer un nom de fichier
 function sanitizeFilename(filename) {
   if (!filename) return '';
-  
+
   return filename
     .trim()
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
@@ -114,7 +114,7 @@ function truncateString(str, maxLength = CONFIG.URL_PREVIEW_LENGTH) {
 // Vérifier si une URL est un stream
 function isStreamUrl(url) {
   if (!url) return false;
-  
+
   const streamPatterns = [
     /\.(m3u8|mpd|f4m|ism)/i,
     /\/manifest\//i,
@@ -128,7 +128,7 @@ function isStreamUrl(url) {
 // Valider une URL
 function isValidUrl(url) {
   if (!url || typeof url !== 'string') return false;
-  
+
   try {
     const urlObj = new URL(url);
     return ['http:', 'https:'].includes(urlObj.protocol);
@@ -155,7 +155,7 @@ async function fetchContext() {
       { type: MESSAGE_TYPES.FETCH_CONTEXT },
       (response) => {
         clearTimeout(timeout);
-        
+
         if (chrome.runtime.lastError) {
           reject(new Error(chrome.runtime.lastError.message));
           return;
@@ -197,12 +197,12 @@ function updateVideoSelector(videos) {
   videos.forEach((videoUrl, index) => {
     const option = document.createElement("option");
     option.value = videoUrl;
-    
+
     const filename = extractFilenameFromUrl(videoUrl);
     const displayName = truncateString(filename, 40);
     option.textContent = `${index + 1}. ${displayName}`;
     option.title = videoUrl; // Afficher l'URL complète au survol
-    
+
     elements.videoSelector.appendChild(option);
   });
 
@@ -265,10 +265,27 @@ async function refreshUI() {
     const context = await fetchContext();
     state.setContext(context);
 
+    // Consolidate video sources (Network + DOM)
+    const streams = context.streams || [];
+    const domVideos = context.detectedVideos || [];
+    // Merge and deduplicate
+    const allVideos = [...new Set([...streams, ...domVideos])];
+
     // Mettre à jour l'interface
-    updateVideoSelector(context.detectedVideos || []);
+    updateVideoSelector(allVideos);
+
+    // Auto-fill URL with page URL if no video selected/found and input is empty
+    if (!elements.urlInput.value && context.pageUrl) {
+      // If we have videos, updateVideoSelector might have already picked the first one.
+      // If it didn't (e.g. empty list), we use any available page URL.
+      // We check if the input is STILL empty after updateVideoSelector
+      if (!elements.urlInput.value) {
+        elements.urlInput.value = context.pageUrl;
+      }
+    }
+
     updateFilename(context);
-    updateDetectionStatus(context);
+    updateDetectionStatus({ ...context, detectedVideos: allVideos });
 
   } catch (error) {
     console.error('[POPUP] Erreur refresh:', error);
@@ -310,7 +327,7 @@ async function downloadViaServer() {
 
     const response = await fetch(`${CONFIG.SERVER_URL}/download`, {
       method: "POST",
-      headers: { 
+      headers: {
         "Content-Type": "application/json",
         "Accept": "application/json"
       },
@@ -327,7 +344,7 @@ async function downloadViaServer() {
 
     if (response.ok) {
       showStatus("✅ Téléchargement démarré !", STATUS_TYPES.SUCCESS);
-      
+
       // Fermer la popup après un délai
       setTimeout(() => {
         window.close();
@@ -338,7 +355,7 @@ async function downloadViaServer() {
 
   } catch (error) {
     console.error('[POPUP] Erreur download:', error);
-    
+
     if (error.message.includes('fetch')) {
       showStatus("❌ Serveur inaccessible (localhost:3000)", STATUS_TYPES.ERROR);
     } else {
@@ -396,7 +413,7 @@ async function downloadLocally() {
         anchor.style.display = 'none';
         document.body.appendChild(anchor);
         anchor.click();
-        
+
         // Nettoyer après 100ms
         setTimeout(() => {
           document.body.removeChild(anchor);
@@ -409,7 +426,7 @@ async function downloadLocally() {
 
   } catch (error) {
     console.error('[POPUP] Erreur téléchargement local:', error);
-    
+
     if (error.message.includes('Cannot access')) {
       showStatus("❌ Page protégée ou extension non autorisée", STATUS_TYPES.ERROR);
     } else {
