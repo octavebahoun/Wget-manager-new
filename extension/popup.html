@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Web Wget Pro - Gestionnaire de téléchargements vidéo intelligent">
+  <title>Web Wget Pro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
+    integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA=="
+    crossorigin="anonymous" referrerpolicy="no-referrer">
+  <style>
+    :root {
+      --primary: #8b5cf6;
+      --primary-hover: #7c3aed;
+      --primary-light: #a78bfa;
+      --success: #10b981;
+      --success-hover: #059669;
+      --warning: #f59e0b;
+      --error: #ef4444;
+      --info: #3b82f6;
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --card-hover: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --border: rgba(255, 255, 255, 0.05);
+      --shadow: rgba(0, 0, 0, 0.3);
+      --gradient: linear-gradient(135deg, #a78bfa 0%, #f472b6 100%);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 750px;
+      min-height: 500px;
+      font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 20px;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* ===== HEADER ===== */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .header-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-hover) 100%);
+      box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+    }
+
+    .header-icon i {
+      font-size: 18px;
+      color: white;
+    }
+
+    .header-title {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .header-title h1 {
+      font-size: 1.1rem;
+      font-weight: 700;
+      background: var(--gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .header-title .version {
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .icon-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-size: 0.9rem;
+    }
+
+    .icon-btn:hover {
+      background: var(--card-hover);
+      color: var(--primary);
+      border-color: var(--primary);
+    }
+
+    .icon-btn:active {
+      transform: scale(0.95);
+    }
+
+    /* ===== INPUT GROUP ===== */
+    .input-group {
+      position: relative;
+      margin-bottom: 14px;
+    }
+
+    .input-group label {
+      display: block;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .input-wrapper {
+      position: relative;
+    }
+
+    .input-wrapper i {
+      position: absolute;
+      left: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      transition: color 0.2s;
+      pointer-events: none;
+    }
+
+    input,
+    select {
+      width: 100%;
+      padding: 12px 14px 12px 42px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text);
+      font-size: 0.9rem;
+      font-family: inherit;
+      transition: all 0.2s ease;
+    }
+
+    input::placeholder {
+      color: var(--text-muted);
+      opacity: 0.6;
+    }
+
+    input:focus,
+    select:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
+      background: var(--card-hover);
+    }
+
+    input:focus+i,
+    select:focus+i {
+      color: var(--primary);
+    }
+
+    select {
+      cursor: pointer;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2394a3b8' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 14px center;
+      padding-right: 36px;
+    }
+
+    select option {
+      background: var(--card-bg);
+      color: var(--text);
+      padding: 8px;
+    }
+
+    #videoSelectorContainer {
+      display: none;
+    }
+
+    #videoSelectorContainer.visible {
+      display: block;
+    }
+
+    /* ===== BUTTONS ===== */
+    .button-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    button {
+      width: 100%;
+      padding: 13px 16px;
+      border: none;
+      border-radius: 10px;
+      font-family: inherit;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      transition: all 0.2s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none !important;
+    }
+
+    button i {
+      font-size: 1rem;
+    }
+
+    button::before {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 0;
+      height: 0;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.1);
+      transform: translate(-50%, -50%);
+      transition: width 0.5s, height 0.5s;
+    }
+
+    button:active::before {
+      width: 300px;
+      height: 300px;
+    }
+
+    #send {
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-hover) 100%);
+      color: white;
+      box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+    }
+
+    #send:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(139, 92, 246, 0.4);
+    }
+
+    #send:active:not(:disabled) {
+      transform: translateY(0);
+    }
+
+    #downloadLocal {
+      background: rgba(16, 185, 129, 0.1);
+      color: var(--success);
+      border: 1px solid rgba(16, 185, 129, 0.2);
+    }
+
+    #downloadLocal:hover:not(:disabled) {
+      background: rgba(16, 185, 129, 0.2);
+      border-color: rgba(16, 185, 129, 0.3);
+    }
+
+    /* ===== STATUS ===== */
+    #status {
+      margin-top: 16px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      font-size: 0.85rem;
+      text-align: center;
+      display: none;
+      animation: slideIn 0.3s ease;
+      line-height: 1.4;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateY(-10px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    #status.visible {
+      display: block;
+    }
+
+    #status.success {
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--success);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    #status.error {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--error);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    #status.info {
+      background: rgba(59, 130, 246, 0.15);
+      color: var(--info);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+
+    #status.warning {
+      background: rgba(245, 158, 11, 0.15);
+      color: var(--warning);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+
+    /* ===== FOOTER ===== */
+    .footer {
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .footer-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-indicator {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 8px var(--success);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0.5;
+      }
+    }
+
+    .status-indicator.offline {
+      background: var(--error);
+      box-shadow: 0 0 8px var(--error);
+      animation: none;
+    }
+
+    #manualScan {
+      color: var(--primary);
+      cursor: pointer;
+      font-weight: 600;
+      transition: color 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    #manualScan:hover {
+      color: var(--primary-light);
+      text-decoration: underline;
+    }
+
+    /* ===== LOADING SPINNER ===== */
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    /* ===== BADGE ===== */
+    .badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: var(--primary);
+      color: white;
+      margin-left: 6px;
+      letter-spacing: 0.5px;
+    }
+
+    .badge.success {
+      background: var(--success);
+    }
+
+    .badge.warning {
+      background: var(--warning);
+    }
+
+    .badge.error {
+      background: var(--error);
+    }
+
+    /* ===== TOOLTIP ===== */
+    .tooltip {
+      position: relative;
+    }
+
+    .tooltip::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 6px 10px;
+      background: var(--card-hover);
+      color: var(--text);
+      font-size: 0.7rem;
+      border-radius: 6px;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+      margin-bottom: 8px;
+      box-shadow: 0 4px 12px var(--shadow);
+    }
+
+    .tooltip:hover::after {
+      opacity: 1;
+    }
+
+    /* ===== SCROLLBAR ===== */
+    ::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: var(--card-bg);
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--primary);
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--primary-hover);
+    }
+
+    /* ===== ANIMATIONS ===== */
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+      }
+
+      to {
+        opacity: 1;
+      }
+    }
+
+    body {
+      animation: fadeIn 0.3s ease;
+    }
+
+    /* ===== RESPONSIVE ===== */
+    @media (max-width: 400px) {
+      body {
+        width: 100%;
+        padding: 16px;
+      }
+
+      .header-title h1 {
+        font-size: 1rem;
+      }
+
+      button {
+        padding: 11px 14px;
+        font-size: 0.85rem;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <!-- HEADER -->
+  <div class="header">
+    <div class="header-left">
+      <div class="header-icon">
+        <i class="fas fa-bolt"></i>
+      </div>
+      <div class="header-title">
+        <h1>Web Wget Pro</h1>
+        <span class="version">v3.0.0</span>
+      </div>
+    </div>
+    <div class="header-actions">
+      <button class="icon-btn tooltip" id="refresh" data-tooltip="Rafraîchir" aria-label="Rafraîchir">
+        <i class="fas fa-sync-alt"></i>
+      </button>
+      <button class="icon-btn tooltip" id="settings" data-tooltip="Paramètres" aria-label="Paramètres">
+        <i class="fas fa-cog"></i>
+      </button>
+    </div>
+  </div>
+
+  <!-- URL INPUT -->
+  <div class="input-group">
+    <label for="url">
+      <i class="fas fa-link"></i> URL de la vidéo
+    </label>
+    <div class="input-wrapper">
+      <input type="url" id="url" placeholder="https://example.com/video.mp4" autocomplete="off" spellcheck="false"
+        aria-label="URL de la vidéo">
+      <i class="fas fa-link"></i>
+    </div>
+  </div>
+
+  <!-- VIDEO SELECTOR -->
+  <div id="videoSelectorContainer" class="input-group">
+    <label for="videoSelector">
+      <i class="fas fa-film"></i> Flux détectés
+    </label>
+    <div class="input-wrapper">
+      <select id="videoSelector" aria-label="Sélectionner un flux détecté">
+        <option value="">-- Aucun flux détecté --</option>
+      </select>
+      <i class="fas fa-film"></i>
+    </div>
+  </div>
+
+  <!-- FILENAME INPUT -->
+  <div class="input-group">
+    <label for="filename">
+      <i class="fas fa-file-signature"></i> Nom du fichier (optionnel)
+    </label>
+    <div class="input-wrapper">
+      <input type="text" id="filename" placeholder="ma_video" autocomplete="off" spellcheck="false"
+        aria-label="Nom du fichier">
+      <i class="fas fa-file-signature"></i>
+    </div>
+  </div>
+
+  <!-- BUTTONS -->
+  <div class="button-group">
+    <button id="send" aria-label="Transférer au serveur">
+      <i class="fas fa-cloud-arrow-up"></i>
+      <span>Transférer au serveur</span>
+    </button>
+
+    <button id="downloadLocal" aria-label="Télécharger localement">
+      <i class="fas fa-download"></i>
+      <span>Télécharger sur ce PC</span>
+    </button>
+  </div>
+
+  <!-- STATUS MESSAGE -->
+  <div id="status" role="alert" aria-live="polite"></div>
+
+  <!-- FOOTER -->
+  <div class="footer">
+    <div class="footer-left">
+      <div class="status-indicator" id="serverStatus"></div>
+      <i class="fas fa-server"></i>
+      <span id="serverInfo">localhost:3000</span>
+    </div>
+    <div class="footer-right">
+      <span id="manualScan">
+        <i class="fas fa-magnifying-glass"></i>
+        Scanner
+      </span>
+    </div>
+  </div>
+
+  <!-- SCRIPTS -->
+  <script src="popup.js"></script>
+</body>
+
+</html>
+</document_content>
