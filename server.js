@@ -437,7 +437,7 @@ app.post("/download", async (req, res) => {
         url
       ];
       
-      if (cookies) ytArgs.push("--cookies", cookies);
+      if (cookies) ytArgs.push("--add-header", `Cookie: ${cookies}`);
       if (noCheckCert) ytArgs.push("--no-check-certificate");
       
       proc = spawn("yt-dlp", ytArgs);
