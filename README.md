@@ -48,7 +48,7 @@ ALLOWED_DOMAINS=vimeo.com,vimeocdn.com,youtube.com
 DOWNLOAD_TIMEOUT=3600
 MAX_FILE_SIZE=5G
 ```
-4. Créer le dossier `downloads` à la racine
+4. Créer le dossier `downloads` à la racine si elle n'apparait pas apres npm install
 ```env
 Cela est necessaire pour récupérer vos téléchargement 
 ```
