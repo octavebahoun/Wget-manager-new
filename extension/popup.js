@@ -9,6 +9,16 @@ const CONFIG = {
   MESSAGE_TIMEOUT: 10000
 };
 
+// Charger la configuration serveur
+if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+  chrome.storage.local.get(['serverUrl'], (result) => {
+    if (result.serverUrl) {
+      CONFIG.SERVER_URL = result.serverUrl;
+      console.log('[POPUP] Serveur configuré:', CONFIG.SERVER_URL);
+    }
+  });
+}
+
 const STATUS_TYPES = {
   SUCCESS: 'success',
   ERROR: 'error',

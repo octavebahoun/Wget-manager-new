@@ -1,7 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const { spawn } = require("child_process");
+const { spawn, exec } = require("child_process");
 const path = require("path");
 const fs = require("fs").promises;
 const fsSync = require("fs");
@@ -59,6 +59,40 @@ app.use((err, req, res, next) => {
 // ================= STORAGE =================
 const downloadsDir = path.join(__dirname, "downloads");
 const STATE_FILE = path.join(__dirname, "active_downloads.json");
+const HISTORY_FILE = path.join(__dirname, "history.json");
+
+// ================= DEPENDENCY CHECK =================
+async function checkDependencies() {
+  const dependencies = [
+    { name: 'aria2c', flag: '--version' },
+    { name: 'ffmpeg', flag: '-version' },
+    { name: 'yt-dlp', flag: '--version' }
+  ];
+  const missing = [];
+
+  log('INFO', 'Vérification des dépendances...');
+
+  for (const { name, flag } of dependencies) {
+    try {
+      await new Promise((resolve, reject) => {
+        exec(`${name} ${flag}`, (err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
+      console.log(`  ✅ ${name} détecté`);
+    } catch (e) {
+      console.log(`  ❌ ${name} MANQUANT`);
+      missing.push(name);
+    }
+  }
+
+  if (missing.length > 0) {
+    log('WARN', `DEPENDENCES MANQUANTES: ${missing.join(', ')}. Certaines fonctionnalités seront indisponibles.`);
+  } else {
+    log('SUCCESS', 'Toutes les dépendances sont installées.');
+  }
+}
 
 async function ensureDirectories() {
   try {
@@ -71,6 +105,7 @@ async function ensureDirectories() {
 // ================= STATE & PERSISTENCE =================
 let activeDownloads = new Map(); // id -> { info, config, process, retryCount }
 let downloadQueue = []; // Array of ids waiting to start
+let historyList = []; // Persistent history
 let clients = []; // SSE clients
 
 function processQueue() {
@@ -96,7 +131,16 @@ async function saveState() {
   }
 }
 
+async function saveHistory() {
+  try {
+    await fs.writeFile(HISTORY_FILE, JSON.stringify(historyList, null, 2));
+  } catch (e) {
+    log('ERROR', 'Erreur sauvegarde historique:', e.message);
+  }
+}
+
 async function loadState() {
+  // Load Active Downloads
   try {
     await fs.access(STATE_FILE);
     const content = await fs.readFile(STATE_FILE, 'utf8');
@@ -112,10 +156,26 @@ async function loadState() {
       activeDownloads.set(info.id, { info, process: null, retryCount: 0 });
     });
 
-    log('INFO', `État restauré : ${activeDownloads.size} téléchargements chargés`);
+    log('INFO', `État restauré : ${activeDownloads.size} téléchargements actifs chargés`);
   } catch (e) {
     if (e.code !== 'ENOENT') {
       log('ERROR', 'Erreur chargement état:', e.message);
+    }
+  }
+
+  // Load History
+  try {
+    await fs.access(HISTORY_FILE);
+    const histContent = await fs.readFile(HISTORY_FILE, 'utf8');
+    historyList = JSON.parse(histContent);
+    // Si format invalide ou tableau vide, on pourrait le réinitialiser, mais on laisse tel quel
+    if (!Array.isArray(historyList)) historyList = [];
+    log('INFO', `Historique restauré : ${historyList.length} entrées`);
+  } catch (e) {
+    if (e.code !== 'ENOENT') {
+      log('ERROR', 'Erreur chargement historique:', e.message);
+    } else {
+      historyList = [];
     }
   }
 }
@@ -243,41 +303,12 @@ app.get("/health", (req, res) => {
 });
 
 app.get("/history", async (req, res) => {
-  try {
-    const files = await fs.readdir(downloadsDir);
-    const history = await Promise.all(
-      files
-        .filter(f => f !== ".gitkeep" && !f.endsWith(".aria2"))
-        .map(async file => {
-          try {
-            const filePath = path.join(downloadsDir, file);
-            const stats = await fs.stat(filePath);
-            return {
-              id: file,
-              filename: file,
-              size: stats.size,
-              date: stats.mtime,
-              status: "completed",
-              progress: 100
-            };
-          } catch {
-            return null;
-          }
-        })
-    );
-
-    const validHistory = history
-      .filter(Boolean)
-      .sort((a, b) => b.date - a.date);
-
-    res.json(validHistory);
-  } catch (err) {
-    log('ERROR', 'Erreur lecture historique', { error: err.message });
-    res.status(500).json({ error: "Impossible de lire l'historique" });
-  }
+  // Retourne l'historique persistent
+  const sortedHistory = [...historyList].sort((a, b) => new Date(b.date) - new Date(a.date));
+  res.json(sortedHistory);
 });
 
-app.get("/transfer/:filename", (req, res) => {
+app.get("/transfer/:filename", async (req, res) => {
   const filename = sanitizeFilename(req.params.filename);
   const filePath = path.join(downloadsDir, filename);
 
@@ -316,6 +347,21 @@ app.post("/cancel", async (req, res) => {
     if (download.process) {
       download.process.kill("SIGTERM");
     }
+
+    // Nettoyage fichiers partiels
+    const partialFiles = [
+      path.join(downloadsDir, download.info.filename),
+      path.join(downloadsDir, `${download.info.filename}.aria2`),
+      path.join(downloadsDir, `${download.info.filename}.part`),
+      path.join(downloadsDir, `${download.info.filename}.mp4.part`)
+    ];
+
+    setTimeout(async () => {
+      for (const f of partialFiles) {
+        try { await fs.unlink(f); } catch { }
+      }
+    }, 1000);
+
     download.info.status = "cancelled";
     broadcast({ type: "status-change", download: download.info });
     activeDownloads.delete(id);
@@ -353,25 +399,31 @@ app.post("/cancel-all", async (req, res) => {
 });
 
 app.delete("/clear-history", async (req, res) => {
+  const keepFiles = req.query.keepFiles === 'true';
   try {
-    const files = await fs.readdir(downloadsDir);
-    let deleted = 0;
+    let deletedCount = 0;
 
-    await Promise.all(
-      files
-        .filter(file => file !== ".gitkeep")
-        .map(async file => {
-          try {
-            await fs.unlink(path.join(downloadsDir, file));
-            deleted++;
-          } catch (e) {
-            log('ERROR', `Erreur suppression ${file}`, { error: e.message });
+    if (!keepFiles) {
+      // Suppression physique seulement si demandée
+      await Promise.all(historyList.map(async (item) => {
+        try {
+          const paths = [
+            path.join(downloadsDir, item.filename),
+            path.join(downloadsDir, item.filename + '.mp4')
+          ];
+          for (const p of paths) {
+            try { await fs.unlink(p); deletedCount++; } catch { }
           }
-        })
-    );
+        } catch { }
+      }));
+    }
 
-    log('INFO', `Historique nettoyé: ${deleted} fichiers supprimés`);
-    res.json({ deleted, message: `${deleted} fichiers supprimés` });
+    const count = historyList.length;
+    historyList = [];
+    await saveHistory();
+
+    log('INFO', `Historique nettoyé: ${count} entrées, ${deletedCount} fichiers supprimés (keepFiles=${keepFiles})`);
+    res.json({ deleted: deletedCount, historyDeleted: count, message: `${deletedCount} fichiers supprimés, historique vidé` });
   } catch (err) {
     log('ERROR', 'Erreur nettoyage historique', { error: err.message });
     res.status(500).json({ error: "Impossible de nettoyer l'historique" });
@@ -388,9 +440,6 @@ app.get("/config", (req, res) => {
     queueSize: downloadQueue.length
   });
 });
-
-// === AJOUT : ROUTE CAPTURE EXTENSION ===
-// À placer AVANT la section "// ================= DOWNLOAD LOGIC ================="
 
 app.post("/api/capture", async (req, res) => {
   const { url, type, tabId } = req.body || {};
@@ -552,7 +601,6 @@ function startDownload(id) {
 
     if (cookies) args.push("--header", `Cookie: ${cookies}`);
     if (noCheckCert) args.push("--check-certificate=false");
-    // if (MAX_FILE_SIZE) args.push("--max-download-limit", MAX_FILE_SIZE); // Option erronée: limite la vitesse, pas la taille
 
     args.push(url);
     proc = spawn("aria2c", args);
@@ -595,16 +643,28 @@ function startDownload(id) {
     }
   }, DOWNLOAD_TIMEOUT * 1000);
 
-  proc.on("close", code => {
+  proc.on("close", async code => {
     clearTimeout(timeout);
 
     if (code === 0) {
       download.info.status = "completed";
       download.info.progress = 100;
       download.info.completedAt = new Date().toISOString();
+
+      try {
+        const stats = await fs.stat(path.join(downloadsDir, filename + (isVideo ? '.mp4' : '')));
+        download.info.fullSize = formatSize(stats.size);
+        download.info.sizeBytes = stats.size;
+      } catch (e) { }
+
       log('SUCCESS', `Téléchargement terminé: ${filename}`, {
         size: download.info.fullSize
       });
+
+      // AJOUT HISTORY
+      const historyItem = { ...download.info, date: new Date().toISOString() };
+      historyList.push(historyItem);
+      saveHistory();
 
       activeDownloads.delete(id);
       broadcast({ type: "status-change", download: download.info });
@@ -642,10 +702,10 @@ function startDownload(id) {
         code,
         retries: retryCount
       });
-    }
 
-    broadcast({ type: "status-change", download: download.info });
-    activeDownloads.delete(id);
+      broadcast({ type: "status-change", download: download.info });
+      activeDownloads.delete(id);
+    }
   });
 
   proc.on("error", err => {
@@ -686,12 +746,12 @@ app.post("/download", async (req, res) => {
   if (typeof url === 'string' && (url.includes('\n') || url.includes('\r') || /referer[:=]/i.test(url))) {
     const match = url.match(/https?:\/\/[^\s'"]+/i);
     if (match) {
-      log('WARN', 'URL malformée reçue, extraction de la vraie URL', { original: url.substring(0,200), extracted: match[0] });
+      log('WARN', 'URL malformée reçue, extraction de la vraie URL', { original: url.substring(0, 200), extracted: match[0] });
       req.body.url = match[0];
       // Mettre à jour la variable locale `url`
       url = match[0];
     } else {
-      log('ERROR', 'URL invalide reçue (champ `url` contient probablement des headers)', { sample: url.substring(0,200) });
+      log('ERROR', 'URL invalide reçue (champ `url` contient probablement des headers)', { sample: url.substring(0, 200) });
       return res.status(400).json({ error: "URL invalide : vérifiez l'extension (le champ url contient des headers ou est malformé)" });
     }
   }
@@ -712,10 +772,10 @@ app.post("/download", async (req, res) => {
 
     if (ct.includes('application/vnd.vimeo.dash+json') || ct.includes('application/dash+xml') || ct.includes('application/manifest+json')) {
       forceVideo = true;
-      log('INFO', 'HEAD content-type indique DASH/manifest (forçage vidéo)', { url: url.substring(0,120), contentType: ct });
+      log('INFO', 'HEAD content-type indique DASH/manifest (forçage vidéo)', { url: url.substring(0, 120), contentType: ct });
     }
   } catch (e) {
-    log('WARN', 'HEAD request échouée (skip content-type detection)', { error: e.message, url: url.substring(0,120) });
+    log('WARN', 'HEAD request échouée (skip content-type detection)', { error: e.message, url: url.substring(0, 120) });
   }
 
   // Vérification espace disque (uniquement pour fichiers directs)
@@ -804,6 +864,7 @@ let server;
 
 async function startServer() {
   try {
+    await checkDependencies(); // AJOUTÉ
     await ensureDirectories();
     await loadState();
 
@@ -834,6 +895,7 @@ async function gracefulShutdown(signal) {
   }
 
   await saveState();
+  await saveHistory(); // AJOUTÉ
   process.exit(0);
 }
 

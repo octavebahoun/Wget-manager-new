@@ -148,7 +148,7 @@ class ToastManager {
   show(message, type = 'info', duration = CONFIG.TOAST_DURATION) {
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
-    
+
     const iconMap = {
       success: 'fa-check-circle',
       error: 'fa-exclamation-circle',
@@ -278,7 +278,7 @@ class SSEManager {
   connect() {
     try {
       this.eventSource = new EventSource('/events');
-      
+
       this.eventSource.onopen = () => {
         console.log('[SSE] Connecté');
         state.isConnected = true;
@@ -381,7 +381,7 @@ let sseManager;
 // ================= DOWNLOAD UI =================
 function updateDownloadUI(download) {
   let el = document.getElementById(`dl-${download.id}`);
-  
+
   if (!el) {
     // Supprimer le message "En attente"
     const emptyState = elements.activeList.querySelector('.empty-state');
@@ -412,12 +412,12 @@ function updateDownloadUI(download) {
         </div>
         <div class="file-details">
           ${isDone
-            ? `<a href="/transfer/${download.filename}" class="file-name download-link" title="Récupérer et supprimer du serveur">
+      ? `<a href="/transfer/${download.filename}" class="file-name download-link" title="Récupérer et supprimer du serveur">
                 ${download.filename}
                 <i class="fas fa-download"></i>
               </a>`
-            : `<div class="file-name">${download.filename}</div>`
-          }
+      : `<div class="file-name">${download.filename}</div>`
+    }
           <div class="file-url" title="${download.url}">${download.url}</div>
         </div>
       </div>
@@ -427,11 +427,11 @@ function updateDownloadUI(download) {
           ${statusLabel}
         </span>
         ${status === 'downloading'
-          ? `<button class="btn-icon btn-danger" onclick="cancelDownload('${download.id}')" title="Annuler">
+      ? `<button class="btn-icon btn-danger" onclick="cancelDownload('${download.id}')" title="Annuler">
               <i class="fas fa-times"></i>
             </button>`
-          : ''
-        }
+      : ''
+    }
       </div>
     </div>
 
@@ -480,7 +480,7 @@ function updateDownloadUI(download) {
       setTimeout(() => {
         el.remove();
         state.removeActiveDownload(download.id);
-        
+
         // Remettre l'empty state si plus de downloads
         if (state.activeDownloads.size === 0) {
           elements.activeList.innerHTML = `
@@ -524,7 +524,7 @@ async function cancelAllDownloads() {
   try {
     const response = await fetch('/cancel-all', { method: 'POST' });
     const data = await response.json();
-    
+
     if (response.ok) {
       toast.success(`${data.cancelled} téléchargement(s) annulé(s)`);
     }
@@ -539,7 +539,7 @@ async function loadHistory(page = 1) {
   try {
     const response = await fetch('/history');
     const data = await response.json();
-    
+
     state.setHistoryData(data);
     state.currentPage = page;
 
@@ -608,17 +608,24 @@ function updatePagination(currentPage, totalPages) {
 }
 
 async function clearHistory() {
-  if (!confirm('Voulez-vous vraiment vider l\'historique et supprimer tous les fichiers du serveur ?')) {
+  const keepFiles = document.getElementById('keepFilesCheck')?.checked || false;
+  const msg = keepFiles
+    ? 'Voulez-vous vider l\'historique (en gardant les fichiers sur le disque) ?'
+    : 'ATTENTION : Voulez-vous supprimer l\'historique ET tous les fichiers téléchargés ?';
+
+  if (!confirm(msg)) {
     return;
   }
 
   try {
-    const response = await fetch('/clear-history');
+    const response = await fetch(`/clear-history?keepFiles=${keepFiles}`, { method: 'DELETE' });
     const data = await response.json();
-    
+
     if (response.ok) {
-      toast.success(`${data.deleted} fichier(s) supprimé(s)`);
+      toast.success(data.message);
       loadHistory();
+    } else {
+      toast.error(data.error || 'Erreur');
     }
   } catch (e) {
     console.error('[CLEAR HISTORY] Erreur:', e);
@@ -632,14 +639,14 @@ async function handleFormSubmit(e) {
 
   const formData = new FormData(e.target);
   const urlsText = formData.get('url').trim();
-  
+
   if (!urlsText) {
     toast.warning('Veuillez entrer au moins une URL');
     return;
   }
 
   const urls = urlsText.split(/\s+/).filter(u => u.trim());
-  
+
   elements.submitBtn.disabled = true;
   elements.submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>Traitement...</span>';
 
@@ -654,10 +661,10 @@ async function handleFormSubmit(e) {
 
       // Vérifier domaine autorisé
       if (state.allowedDomains.length > 0) {
-        const isAllowed = state.allowedDomains.some(d => 
+        const isAllowed = state.allowedDomains.some(d =>
           hostname === d || hostname.endsWith('.' + d)
         );
-        
+
         if (!isAllowed) {
           toast.error(`Domaine non autorisé: ${hostname}`);
           errorCount++;
