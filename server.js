@@ -320,6 +320,16 @@ function isDomainAllowed(url) {
 
 function isVideoPlatform(url) {
   const platforms = [
+    'youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'twitch.tv'
+  ];
+  try {
+    const hostname = new URL(url).hostname;
+    return platforms.some(p => hostname.includes(p));
+  } catch { return false; }
+}
+
+function isVideoPlatform(url) {
+  const platforms = [
     'youtube.com/watch',
     'youtu.be/',
     'twitch.tv/',
