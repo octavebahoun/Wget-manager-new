@@ -57,22 +57,33 @@
           
           <!-- URL Input -->
           <div class="form-group">
-            <label for="urlInput" class="form-label">
-              <i class="fas fa-link"></i>
-              URLs de téléchargement
-            </label>
+            <div class="label-group">
+               <label for="urlInput" class="form-label">
+                <i class="fas fa-link"></i>
+                URL de téléchargement
+              </label>
+              <button type="button" class="btn-secondary btn-analyze" id="analyzeBtn" style="display: none;">
+                <i class="fas fa-search"></i>
+                Analyser les qualités
+              </button>
+            </div>
             <textarea 
               id="urlInput"
               name="url" 
               class="input-field textarea-field" 
-              placeholder="Collez vos liens ici (un par ligne pour téléchargement multiple)..." 
+              placeholder="Collez un lien vidéo ici pour choisir la qualité, ou plusieurs liens pour un téléchargement direct..."
               required
-              rows="4"
+              rows="3"
               spellcheck="false"></textarea>
             <div class="input-hint">
               <i class="fas fa-info-circle"></i>
               Supporte: HTTP/S, Magnet, HLS (m3u8), DASH (mpd), YouTube, Vimeo...
             </div>
+          </div>
+
+          <div id="formatSelection" class="format-selection-container" style="display: none;">
+            <h3 class="format-title">Qualités disponibles</h3>
+            <div id="formatList" class="format-list"></div>
           </div>
 
           <!-- Advanced Options Toggle -->

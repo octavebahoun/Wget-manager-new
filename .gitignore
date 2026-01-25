@@ -37,4 +37,4 @@ downloads/
 
 # Misc
 coverage/
-.cache/
+.cache/server.out
