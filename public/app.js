@@ -655,20 +655,22 @@ async function handleFormSubmit(e) {
 
   for (const url of urls) {
     try {
-      // Validation URL
-      const urlObj = new URL(url);
-      const hostname = urlObj.hostname;
+      // Validation URL (skip for magnet)
+      if (!url.startsWith('magnet:')) {
+        const urlObj = new URL(url);
+        const hostname = urlObj.hostname;
 
-      // Vérifier domaine autorisé
-      if (state.allowedDomains.length > 0) {
-        const isAllowed = state.allowedDomains.some(d =>
-          hostname === d || hostname.endsWith('.' + d)
-        );
+        // Vérifier domaine autorisé
+        if (state.allowedDomains.length > 0) {
+          const isAllowed = state.allowedDomains.some(d =>
+            hostname === d || hostname.endsWith('.' + d)
+          );
 
-        if (!isAllowed) {
-          toast.error(`Domaine non autorisé: ${hostname}`);
-          errorCount++;
-          continue;
+          if (!isAllowed) {
+            toast.error(`Domaine non autorisé: ${hostname}`);
+            errorCount++;
+            continue;
+          }
         }
       }
 
@@ -683,7 +685,8 @@ async function handleFormSubmit(e) {
           ua: formData.get('ua'),
           noCheckCert: formData.get('noCheckCert') === 'on',
           singleSegment: formData.get('singleSegment') === 'on',
-          cookies: formData.get('cookies')
+          cookies: formData.get('cookies'),
+          connections: formData.get('connections')
         })
       });
 
