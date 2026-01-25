@@ -71,6 +71,9 @@ const elements = {
   urlInput: document.getElementById('urlInput'),
   uaInput: document.getElementById('uaInput'),
   submitBtn: document.getElementById('submitBtn'),
+  analyzeBtn: document.getElementById('analyzeBtn'),
+  formatSelection: document.getElementById('formatSelection'),
+  formatList: document.getElementById('formatList'),
   advToggle: document.getElementById('advToggle'),
   advOptions: document.getElementById('advOptions'),
   activeList: document.getElementById('activeList'),
@@ -634,11 +637,86 @@ async function clearHistory() {
 }
 
 // ================= FORM SUBMISSION =================
+// ================= FORMAT ANALYSIS =================
+function isVideoPlatform(url) {
+  const platforms = ['youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'twitch.tv'];
+  try {
+    const hostname = new URL(url).hostname;
+    return platforms.some(p => hostname.includes(p));
+  } catch { return false; }
+}
+
+function onUrlInputChange() {
+  const url = elements.urlInput.value.trim().split(/\s+/)[0];
+  if (isVideoPlatform(url) && elements.urlInput.value.trim().split(/\s+/).length === 1) {
+    elements.analyzeBtn.style.display = 'block';
+  } else {
+    elements.analyzeBtn.style.display = 'none';
+    elements.formatSelection.style.display = 'none';
+  }
+}
+
+async function analyzeFormats() {
+  const url = elements.urlInput.value.trim();
+  if (!url) {
+    toast.warning("Veuillez entrer une URL à analyser.");
+    return;
+  }
+
+  elements.analyzeBtn.disabled = true;
+  elements.analyzeBtn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Analyse...`;
+
+  try {
+    const response = await fetch('/api/formats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+
+    if (!response.ok) {
+      const data = await response.json();
+      throw new Error(data.error || 'Erreur inconnue');
+    }
+
+    const data = await response.json();
+    displayFormats(data.formats);
+  } catch (e) {
+    toast.error(`Erreur d'analyse: ${e.message}`);
+    elements.formatSelection.style.display = 'none';
+  } finally {
+    elements.analyzeBtn.disabled = false;
+    elements.analyzeBtn.innerHTML = `<i class="fas fa-search"></i> Analyser les qualités`;
+  }
+}
+
+function displayFormats(formats) {
+  if (!formats || formats.length === 0) {
+    elements.formatList.innerHTML = '<p>Aucun format vidéo/audio trouvé.</p>';
+    elements.formatSelection.style.display = 'block';
+    return;
+  }
+
+  elements.formatList.innerHTML = formats.map((f, index) => {
+    const label = `${f.resolution || ''} ${f.ext} (${f.note || 'Audio'}) - ${formatFileSize(f.fileSize)}`;
+    return `
+      <div class="format-item">
+        <input type="radio" id="format-${index}" name="formatCode" value="${f.formatId}" ${index === 0 ? 'checked' : ''}>
+        <label for="format-${index}">${label}</label>
+      </div>
+    `;
+  }).join('');
+
+  elements.formatSelection.style.display = 'block';
+}
+
+
+// ================= FORM SUBMISSION =================
 async function handleFormSubmit(e) {
   e.preventDefault();
 
   const formData = new FormData(e.target);
   const urlsText = formData.get('url').trim();
+  const selectedFormat = formData.get('formatCode');
 
   if (!urlsText) {
     toast.warning('Veuillez entrer au moins une URL');
@@ -646,6 +724,11 @@ async function handleFormSubmit(e) {
   }
 
   const urls = urlsText.split(/\s+/).filter(u => u.trim());
+
+  if (urls.length > 1 && selectedFormat) {
+     toast.warning("Le choix de la qualité n'est disponible que pour une seule URL à la fois.");
+     return;
+  }
 
   elements.submitBtn.disabled = true;
   elements.submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>Traitement...</span>';
@@ -655,26 +738,16 @@ async function handleFormSubmit(e) {
 
   for (const url of urls) {
     try {
-      // Validation URL (skip for magnet)
       if (!url.startsWith('magnet:')) {
         const urlObj = new URL(url);
         const hostname = urlObj.hostname;
-
-        // Vérifier domaine autorisé
-        if (state.allowedDomains.length > 0) {
-          const isAllowed = state.allowedDomains.some(d =>
-            hostname === d || hostname.endsWith('.' + d)
-          );
-
-          if (!isAllowed) {
-            toast.error(`Domaine non autorisé: ${hostname}`);
-            errorCount++;
-            continue;
-          }
+        if (state.allowedDomains.length > 0 && !state.allowedDomains.some(d => hostname === d || hostname.endsWith('.' + d))) {
+          toast.error(`Domaine non autorisé: ${hostname}`);
+          errorCount++;
+          continue;
         }
       }
 
-      // Envoyer la requête
       const response = await fetch('/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -686,7 +759,8 @@ async function handleFormSubmit(e) {
           noCheckCert: formData.get('noCheckCert') === 'on',
           singleSegment: formData.get('singleSegment') === 'on',
           cookies: formData.get('cookies'),
-          connections: formData.get('connections')
+          connections: formData.get('connections'),
+          formatCode: selectedFormat
         })
       });
 
@@ -704,9 +778,9 @@ async function handleFormSubmit(e) {
     }
   }
 
-  // Reset form
   e.target.reset();
   elements.uaInput.value = navigator.userAgent;
+  elements.formatSelection.style.display = 'none';
 
   // Feedback
   if (successCount > 0) {
@@ -736,6 +810,12 @@ async function loadConfig() {
 function initializeEventListeners() {
   // Form submission
   elements.downloadForm.addEventListener('submit', handleFormSubmit);
+
+  // URL input change
+  elements.urlInput.addEventListener('input', onUrlInputChange);
+
+  // Analyze button
+  elements.analyzeBtn.addEventListener('click', analyzeFormats);
 
   // Advanced toggle
   elements.advToggle.addEventListener('click', () => {

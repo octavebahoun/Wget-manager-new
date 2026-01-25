@@ -320,6 +320,16 @@ function isDomainAllowed(url) {
 
 function isVideoPlatform(url) {
   const platforms = [
+    'youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'twitch.tv'
+  ];
+  try {
+    const hostname = new URL(url).hostname;
+    return platforms.some(p => hostname.includes(p));
+  } catch { return false; }
+}
+
+function isVideoPlatform(url) {
+  const platforms = [
     'youtube.com/watch',
     'youtu.be/',
     'twitch.tv/',
@@ -527,12 +537,68 @@ app.post("/api/capture", async (req, res) => {
   }
 });
 
+app.post("/api/formats", async (req, res) => {
+  const { url } = req.body;
+  log('INFO', 'Demande /api/formats reçue', { url });
+
+  if (!url || !isVideoPlatform(url)) {
+    log('WARN', 'URL invalide pour /api/formats', { url });
+    return res.status(400).json({ error: "URL de vidéo valide manquante" });
+  }
+
+  try {
+    const command = 'yt-dlp'; // Utiliser le yt-dlp du PATH
+    const args = ['--dump-json', '--batch-file', '-'];
+    log('INFO', 'Exécution de yt-dlp via stdin', { command: `${command} ${args.join(' ')}` });
+
+    const formatsJson = await new Promise((resolve, reject) => {
+      const proc = spawn(command, args);
+      let stdout = '';
+      let stderr = '';
+
+      proc.stdout.on('data', (data) => stdout += data);
+      proc.stderr.on('data', (data) => stderr += data);
+
+      proc.on('close', (code) => {
+        log('INFO', 'yt-dlp terminé', { code });
+        if (code !== 0) {
+          log('ERROR', 'yt-dlp stderr', { stderr });
+          return reject(new Error(stderr || `yt-dlp a quitté avec le code ${code}`));
+        }
+        log('INFO', 'yt-dlp stdout', { stdout: stdout.substring(0, 100) + '...' });
+        resolve(stdout);
+      });
+
+      proc.stdin.write(url);
+      proc.stdin.end();
+    });
+
+    const data = JSON.parse(formatsJson);
+    const formats = data.formats.map(f => ({
+      formatId: f.format_id,
+      resolution: f.resolution,
+      ext: f.ext,
+      fps: f.fps,
+      vcodec: f.vcodec,
+      acodec: f.acodec,
+      fileSize: f.filesize || f.filesize_approx,
+      note: f.format_note,
+    })).filter(f => f.vcodec !== 'none' || f.acodec !== 'none');
+
+    res.json({ title: data.title, formats });
+
+  } catch (e) {
+    log('ERROR', 'Impossible de récupérer les formats', { error: e.message });
+    res.status(500).json({ error: "Impossible de récupérer les formats pour cette URL" });
+  }
+});
+
 // ================= DOWNLOAD LOGIC =================
 function startDownload(id) {
   const download = activeDownloads.get(id);
   if (!download) return;
 
-  const { url, filename, ua, referer, cookies, noCheckCert, singleSegment, forceVideo, connections } = download.config;
+  const { url, filename, ua, referer, cookies, noCheckCert, singleSegment, forceVideo, formatCode } = download.config;
   let { retryCount } = download;
   const isVideo = !!forceVideo || isVideoPlatform(url);
   const isTorrent = url.startsWith("magnet:");
@@ -554,8 +620,9 @@ function startDownload(id) {
     // YT-DLP pour plateformes vidéo
     log('INFO', `Utilisation de yt-dlp${isRetry ? ' (retry ' + retryCount + ')' : ''}`);
 
+    const format = formatCode || "bestvideo+bestaudio/best";
     const ytArgs = [
-      "--newline", "--no-playlist", "--format", "bestvideo+bestaudio/best",
+      "--newline", "--no-playlist", "--format", format,
       "--merge-output-format", "mp4", "--output", path.join(downloadsDir, `${filename}.mp4`),
       url
     ];
@@ -770,7 +837,7 @@ function startDownload(id) {
 
 // ================= DOWNLOAD HANDLER =================
 app.post("/download", async (req, res) => {
-  let { url, referer, ua, noCheckCert, customFilename, singleSegment, cookies, connections } = req.body;
+  let { url, referer, ua, noCheckCert, customFilename, singleSegment, cookies, connections, formatCode } = req.body;
 
   // Validation basique
   if (!url) {
@@ -885,7 +952,7 @@ app.post("/download", async (req, res) => {
   };
 
   const downloadConfig = {
-    url, referer, ua, noCheckCert, customFilename, singleSegment, cookies, filename, forceVideo, connections
+    url, referer, ua, noCheckCert, customFilename, singleSegment, cookies, filename, forceVideo, connections, formatCode
   };
 
   log('INFO', `Nouveau téléchargement en file d'attente: ${filename}`, {
