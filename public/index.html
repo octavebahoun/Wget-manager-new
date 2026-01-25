@@ -71,7 +71,7 @@
               spellcheck="false"></textarea>
             <div class="input-hint">
               <i class="fas fa-info-circle"></i>
-              Supporte: HTTP/HTTPS, HLS (m3u8), DASH (mpd), YouTube, Vimeo, Twitch...
+              Supporte: HTTP/S, Magnet, HLS (m3u8), DASH (mpd), YouTube, Vimeo...
             </div>
           </div>
 
@@ -135,6 +135,19 @@
                   name="cookies" 
                   class="input-field" 
                   placeholder="session=abc123; token=xyz">
+              </div>
+              <div class="form-group">
+                <label class="form-label">
+                  <i class="fas fa-network-wired"></i>
+                  Connexions
+                </label>
+                <input
+                  type="number"
+                  name="connections"
+                  class="input-field"
+                  placeholder="1-16 (défaut: 16)"
+                  min="1"
+                  max="16">
               </div>
             </div>
 
