@@ -1,0 +1,11 @@
+[dotenv@17.2.3] injecting env (2) from .env -- tip: 🗂️ backup and recover secrets: https://dotenvx.com/ops
+2026-01-25 01:17:22 [32m[SUCCESS][0m Liste de trackers mise à jour: 62 trackers chargés.
+2026-01-25 01:17:22 [32m[SUCCESS][0m Règles de rangement chargées.
+2026-01-25 01:17:22 [36m[INFO][0m Vérification des dépendances...
+  ❌ aria2c MANQUANT
+  ❌ ffmpeg MANQUANT
+  ❌ yt-dlp MANQUANT
+2026-01-25 01:17:22 [33m[WARN][0m DEPENDENCES MANQUANTES: aria2c, ffmpeg, yt-dlp. Certaines fonctionnalités seront indisponibles.
+2026-01-25 01:17:22 [36m[INFO][0m Historique restauré : 0 entrées
+2026-01-25 01:17:22 [32m[SUCCESS][0m Serveur démarré sur le port 3000
+2026-01-25 01:17:22 [36m[INFO][0m Configuration: 5 téléchargements max, tous domaines autorisés
