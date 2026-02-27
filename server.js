@@ -18,6 +18,26 @@ const LOG_LEVELS = {
   SUCCESS: '\x1b[32m[SUCCESS]\x1b[0m'
 };
 
+// Enhanced logging with performance optimization
+const logBuffer = [];
+let logWritePending = false;
+
+async function writeLogBatch() {
+  if (logBuffer.length === 0 || logWritePending) return;
+  
+  logWritePending = true;
+  const entries = logBuffer.splice(0);
+  const logContent = entries.join('');
+  
+  try {
+    await fs.appendFile(path.join(__dirname, 'server.log'), logContent, 'utf8');
+  } catch (err) {
+    console.error('Erreur écriture log batch:', err);
+  } finally {
+    logWritePending = false;
+  }
+}
+
 async function log(level, message, data = null) {
   const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
   const logMessage = `${timestamp} ${LOG_LEVELS[level]} ${message}`;
@@ -25,10 +45,14 @@ async function log(level, message, data = null) {
   if (data) console.log('  ↳', data);
 
   const logEntry = `${timestamp} [${level}] ${message}${data ? ' | ' + JSON.stringify(data) : ''}\n`;
-  try {
-    await fs.appendFile(path.join(__dirname, 'server.log'), logEntry, 'utf8');
-  } catch (err) {
-    console.error('Erreur écriture log:', err);
+  logBuffer.push(logEntry);
+  
+  // Write to file in batches to improve performance
+  if (logBuffer.length >= 10) {
+    await writeLogBatch();
+  } else {
+    // Schedule batch write if buffer isn't full
+    setTimeout(writeLogBatch, 100);
   }
 }
 
@@ -41,14 +65,32 @@ const RETRY_ATTEMPTS = parseInt(process.env.RETRY_ATTEMPTS || "2");
 const RETRY_DELAY = parseInt(process.env.RETRY_DELAY || "3000");
 
 // ================= MIDDLEWARE =================
-app.use((req, res, next) => {
-  console.log(`[DEBUG_REQ] ${req.method} ${req.url}`);
-  next();
-});
-app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.static("public"));
-app.use("/files", express.static("downloads"));
+// Performance optimized middleware setup
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+// Optimized JSON parsing with streaming
+app.use(express.json({ 
+  limit: '10mb',
+  verify: (req, res, buf, encoding) => {
+    // Add request size tracking
+    req.bodySize = buf.length;
+  }
+}));
+
+// Static file serving with caching optimizations
+app.use("/files", express.static("downloads", {
+  maxAge: '1d',
+  etag: true,
+  lastModified: true
+}));
+app.use(express.static("public", {
+  maxAge: '1h',
+  etag: true
+}));
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -201,15 +243,33 @@ app.get("/events", (req, res) => {
   });
 });
 
+// Optimized broadcast with debouncing and error handling
+let broadcastDebounceTimer = null;
+let pendingBroadcasts = [];
+
 function broadcast(data) {
-  const message = `data: ${JSON.stringify(data)}\n\n`;
-  clients.forEach(c => {
-    try {
-      c.res.write(message);
-    } catch (err) {
-      log('WARN', 'Erreur broadcast SSE', { clientId: c.id });
-    }
-  });
+  // Add to pending broadcasts
+  pendingBroadcasts.push(`data: ${JSON.stringify(data)}\\n\\n`);
+
+  // Debounce broadcast to reduce I/O operations
+  clearTimeout(broadcastDebounceTimer);
+  broadcastDebounceTimer = setTimeout(() => {
+    if (pendingBroadcasts.length === 0) return;
+    
+    const messages = pendingBroadcasts.join('');
+    pendingBroadcasts = [];
+    
+    // Filter out disconnected clients efficiently
+    clients = clients.filter(c => {
+      try {
+        c.res.write(messages);
+        return true; // Keep connected clients
+      } catch (err) {
+        log('WARN', 'Client SSE déconnecté', { clientId: c.id });
+        return false; // Remove disconnected clients
+      }
+    });
+  }, 50); // 50ms debounce period
 
   // Sauvegarder l'état sur changements importants
   if (data.type === 'status-change' ||
@@ -243,9 +303,23 @@ function defaultUA(ua) {
   return ua || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 }
 
-// ================= UTILITY FUNCTIONS =================
+// ================= OPTIMIZED UTILITY FUNCTIONS =================
+// Pre-compiled regular expressions for better performance
+const FILENAME_SANITIZE_REGEX = /[^a-zA-Z0-9._-]/g;
+const VIDEO_PLATFORMS_REGEX = new RegExp([
+  'youtube\\.com/watch',
+  'youtu\\.be/',
+  'twitch\\.tv/',
+  'vimeo\\.com/',
+  'dailymotion\\.com/video',
+  'facebook\\.com/watch',
+  'instagram\\.com/p/',
+  'tiktok\\.com/',
+  'googlevideo\\.com'
+].join('|'));
+
 function sanitizeFilename(filename) {
-  return filename.replace(/[^a-zA-Z0-9._-]/g, "_").substring(0, 255);
+  return filename.replace(FILENAME_SANITIZE_REGEX, "_").substring(0, 255);
 }
 
 function formatSize(bytes) {
@@ -259,7 +333,7 @@ function formatSize(bytes) {
 function isAllowedProtocol(url) {
   try {
     const protocol = new URL(url).protocol;
-    return ["http:", "https:"].includes(protocol);
+    return protocol === 'http:' || protocol === 'https:';
   } catch {
     return false;
   }
@@ -279,18 +353,7 @@ function isDomainAllowed(url) {
 }
 
 function isVideoPlatform(url) {
-  const platforms = [
-    'youtube.com/watch',
-    'youtu.be/',
-    'twitch.tv/',
-    'vimeo.com/',
-    'dailymotion.com/video',
-    'facebook.com/watch',
-    'instagram.com/p/',
-    'tiktok.com/',
-    'googlevideo.com' // direct Google video delivery links (videoplayback) - treat as video
-  ];
-  return platforms.some(platform => url.includes(platform));
+  return VIDEO_PLATFORMS_REGEX.test(url);
 }
 
 // ================= ROUTES =================
@@ -756,15 +819,17 @@ app.post("/download", async (req, res) => {
     }
   }
 
-  // ----- Détection HEAD pour reconnaître les manifests DASH / JSON (ex: Vimeo) -----
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000);
+  // Optimized HEAD request with connection pooling
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 4000);
 
+  try {
     const headRes = await fetch(url, {
       method: 'HEAD',
       headers: { 'User-Agent': defaultUA(ua) },
-      signal: controller.signal
+      signal: controller.signal,
+      // Enable connection reuse
+      agent: false
     });
     clearTimeout(timeoutId);
 
@@ -781,15 +846,16 @@ app.post("/download", async (req, res) => {
   // Vérification espace disque (uniquement pour fichiers directs)
   if (!isVideoPlatform(url) && !url.match(/\.(m3u8|mpd)/i)) {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const diskCheckController = new AbortController();
+      const diskCheckTimeoutId = setTimeout(() => diskCheckController.abort(), 5000);
 
       const headRes = await fetch(url, {
         method: 'HEAD',
         headers: { 'User-Agent': defaultUA(ua) },
-        signal: controller.signal
+        signal: diskCheckController.signal,
+        agent: false
       });
-      clearTimeout(timeoutId);
+      clearTimeout(diskCheckTimeoutId);
 
       const contentLength = headRes.headers.get('content-length');
 

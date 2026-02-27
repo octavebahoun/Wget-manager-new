@@ -88,7 +88,11 @@ const elements = {
   toastContainer: document.getElementById('toastContainer')
 };
 
-// ================= UTILITY FUNCTIONS =================
+// ================= OPTIMIZED UTILITY FUNCTIONS =================
+// Pre-compiled regex and cached values for better performance
+const FILENAME_SANITIZE_REGEX = /[<>:"/\\|?*\x00-\x1F]/g;
+const FILE_EXTENSION_REGEX = /\.([^.]+)$/;
+
 // Formater la taille de fichier
 function formatFileSize(bytes) {
   if (!bytes || bytes === 0) return '0 B';
@@ -109,38 +113,40 @@ function formatDate(date) {
   });
 }
 
-// Obtenir l'icône selon l'extension
+// Obtenir l'icône selon l'extension - optimized with cached map
+const ICON_MAP = {
+  // Video
+  mp4: 'fa-video', mkv: 'fa-video', avi: 'fa-video', mov: 'fa-video',
+  webm: 'fa-video', flv: 'fa-video', wmv: 'fa-video', m4v: 'fa-video',
+  // Audio
+  mp3: 'fa-music', wav: 'fa-music', flac: 'fa-music', aac: 'fa-music',
+  m4a: 'fa-music', ogg: 'fa-music', wma: 'fa-music',
+  // Image
+  jpg: 'fa-image', jpeg: 'fa-image', png: 'fa-image', gif: 'fa-image',
+  webp: 'fa-image', svg: 'fa-image', bmp: 'fa-image',
+  // Archive
+  zip: 'fa-file-archive', rar: 'fa-file-archive', '7z': 'fa-file-archive',
+  tar: 'fa-file-archive', gz: 'fa-file-archive',
+  // Document
+  pdf: 'fa-file-pdf', doc: 'fa-file-word', docx: 'fa-file-word',
+  xls: 'fa-file-excel', xlsx: 'fa-file-excel', ppt: 'fa-file-powerpoint',
+  pptx: 'fa-file-powerpoint', txt: 'fa-file-lines',
+  // Code
+  js: 'fa-file-code', html: 'fa-file-code', css: 'fa-file-code',
+  json: 'fa-file-code', xml: 'fa-file-code', py: 'fa-file-code',
+  // Executable
+  exe: 'fa-cube', msi: 'fa-cube', deb: 'fa-cube', dmg: 'fa-cube'
+};
+
 function getFileIcon(filename) {
-  const ext = filename.split('.').pop().toLowerCase();
-  const iconMap = {
-    // Video
-    mp4: 'fa-video', mkv: 'fa-video', avi: 'fa-video', mov: 'fa-video',
-    webm: 'fa-video', flv: 'fa-video', wmv: 'fa-video', m4v: 'fa-video',
-    // Audio
-    mp3: 'fa-music', wav: 'fa-music', flac: 'fa-music', aac: 'fa-music',
-    m4a: 'fa-music', ogg: 'fa-music', wma: 'fa-music',
-    // Image
-    jpg: 'fa-image', jpeg: 'fa-image', png: 'fa-image', gif: 'fa-image',
-    webp: 'fa-image', svg: 'fa-image', bmp: 'fa-image',
-    // Archive
-    zip: 'fa-file-archive', rar: 'fa-file-archive', '7z': 'fa-file-archive',
-    tar: 'fa-file-archive', gz: 'fa-file-archive',
-    // Document
-    pdf: 'fa-file-pdf', doc: 'fa-file-word', docx: 'fa-file-word',
-    xls: 'fa-file-excel', xlsx: 'fa-file-excel', ppt: 'fa-file-powerpoint',
-    pptx: 'fa-file-powerpoint', txt: 'fa-file-lines',
-    // Code
-    js: 'fa-file-code', html: 'fa-file-code', css: 'fa-file-code',
-    json: 'fa-file-code', xml: 'fa-file-code', py: 'fa-file-code',
-    // Executable
-    exe: 'fa-cube', msi: 'fa-cube', deb: 'fa-cube', dmg: 'fa-cube'
-  };
-  return iconMap[ext] || 'fa-file';
+  const match = filename.match(FILE_EXTENSION_REGEX);
+  const ext = match ? match[1].toLowerCase() : '';
+  return ICON_MAP[ext] || 'fa-file';
 }
 
 // Sanitize filename
 function sanitizeFilename(filename) {
-  return filename.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').substring(0, 255);
+  return filename.replace(FILENAME_SANITIZE_REGEX, '_').substring(0, 255);
 }
 
 // ================= TOAST NOTIFICATIONS =================
@@ -340,7 +346,7 @@ class SSEManager {
     }
 
     state.reconnectAttempts++;
-    const delay = CONFIG.RECONNECT_DELAY * state.reconnectAttempts;
+    const delay = Math.min(CONFIG.RECONNECT_DELAY * state.reconnectAttempts, 30000); // Max 30 seconds
 
     console.log(`[SSE] Reconnexion dans ${delay}ms (tentative ${state.reconnectAttempts})`);
 
