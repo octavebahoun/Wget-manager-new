@@ -94,10 +94,15 @@ const elements = {
   pageTitle: document.getElementById('pageTitle')
 };
 
-// ================= OPTIMIZED UTILITY FUNCTIONS =================
+// ================= UTILITY FUNCTIONS =================
 // Pre-compiled regex and cached values for better performance
 const FILENAME_SANITIZE_REGEX = /[<>:"/\\|?*\x00-\x1F]/g;
 const FILE_EXTENSION_REGEX = /\.([^.]+)$/;
+const PROTOCOL_REGEX = /^(https?|magnet:)/;
+
+function isAllowedProtocol(url) {
+  return PROTOCOL_REGEX.test(url);
+}
 
 // Formater la taille de fichier
 function formatFileSize(bytes) {
@@ -604,24 +609,31 @@ async function clearHistory() {
   }
 }
 
-// ================= FORM SUBMISSION =================
 // ================= FORMAT ANALYSIS =================
 function isVideoPlatform(url) {
-  const platforms = ['youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'twitch.tv'];
+  const platforms = [
+    'youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'twitch.tv',
+    'facebook.com', 'instagram.com', 'tiktok.com', 'pinterest.com',
+    'googlevideo.com', 'x.com', 'twitter.com', 'reddit.com'
+  ];
   try {
-    const hostname = new URL(url).hostname;
+    const hostname = new URL(url).hostname.toLowerCase();
     return platforms.some(p => hostname.includes(p));
   } catch { return false; }
 }
 
 function onUrlInputChange() {
-  const url = elements.urlInput.value.trim().split(/\s+/)[0];
-  if (isVideoPlatform(url) && elements.urlInput.value.trim().split(/\s+/).length === 1) {
+  const urls = elements.urlInput.value.trim().split(/\s+/).filter(u => u);
+  
+  if (urls.length === 1 && isVideoPlatform(urls[0])) {
     elements.analyzeBtn.style.display = 'block';
   } else {
     elements.analyzeBtn.style.display = 'none';
     elements.formatSelection.style.display = 'none';
   }
+  
+  // Enable/disable submit button based on URL input
+  elements.submitBtn.disabled = urls.length === 0;
 }
 
 async function analyzeFormats() {
@@ -699,13 +711,19 @@ async function handleFormSubmit(e) {
   }
 
   elements.submitBtn.disabled = true;
-  elements.submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>Traitement...</span>';
+  elements.submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>Téléchargement en cours...</span>';
 
   let successCount = 0;
   let errorCount = 0;
 
   for (const url of urls) {
     try {
+      if (!isAllowedProtocol(url)) {
+        toast.error(`Protocole non supporté: ${url.substring(0, 30)}...`);
+        errorCount++;
+        continue;
+      }
+
       if (!url.startsWith('magnet:')) {
         const urlObj = new URL(url);
         const hostname = urlObj.hostname;
@@ -759,7 +777,7 @@ async function handleFormSubmit(e) {
   }
 
   elements.submitBtn.disabled = false;
-  elements.submitBtn.innerHTML = '<i class="fas fa-bolt"></i> <span>Analyser et télécharger</span>';
+  elements.submitBtn.innerHTML = '<i class="fas fa-bolt"></i> <span>Lancer le téléchargement</span>';
 }
 
 // ================= CONFIG =================

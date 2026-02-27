@@ -288,6 +288,7 @@ button {
 .input-wrapper {
   position: relative;
   width: 100%;
+  margin-bottom: 16px;
 }
 
 .text-input {
@@ -299,16 +300,26 @@ button {
   color: white;
   font-size: 0.95rem;
   transition: var(--transition-smooth);
+  box-sizing: border-box;
 }
 
 .text-input:focus {
   outline: none;
-  border-color: var(--text-muted);
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.1);
 }
 
 .text-area {
   min-height: 120px;
-  resize: none;
+  resize: vertical;
+  font-family: 'Inter', -apple-system, sans-serif;
+}
+
+/* URL Input specific styles */
+#urlInput {
+  min-height: 100px;
+  font-size: 1rem;
+  line-height: 1.5;
 }
 
 /* BUTTONS */
