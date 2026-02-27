@@ -1,8 +1,10 @@
 ```
+# Dependencies
+node_modules/
+
 # Logs and temp files
 *.log
 *.tmp
-*.swp
 
 # Environment
 .env
@@ -13,16 +15,8 @@
 .vscode/
 .idea/
 
-# Extension artifacts & keys
-*.crx
-*.pem
-extension.crx
-extension.pem
-
-# App data / downloads
-active_downloads.json
-downloads/
-
-# Misc
-coverage/
-.cache/server.out
+# Build outputs
+dist/
+build/
+target/
+```
