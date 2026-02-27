@@ -21,7 +21,7 @@ function saveOptions() {
 // Restaurer les options
 function restoreOptions() {
     chrome.storage.local.get(
-        { serverUrl: 'http://localhost:3000' }, // Valeur par défaut
+        { serverUrl: 'http://localhost:3002' }, // Valeur par défaut
         (items) => {
             document.getElementById('serverUrl').value = items.serverUrl;
         }

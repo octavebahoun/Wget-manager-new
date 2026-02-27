@@ -40,6 +40,12 @@ const MAX_CONCURRENT_DOWNLOADS = parseInt(process.env.MAX_CONCURRENT_DOWNLOADS |
 const RETRY_ATTEMPTS = parseInt(process.env.RETRY_ATTEMPTS || "2");
 const RETRY_DELAY = parseInt(process.env.RETRY_DELAY || "3000");
 
+// ================= TOOLS PATHS =================
+const YT_DLP_BIN = fsSync.existsSync(path.join(__dirname, 'bin', 'yt-dlp'))
+  ? path.join(__dirname, 'bin', 'yt-dlp')
+  : 'yt-dlp';
+const YT_DLP_ARGS = ['--js-runtimes', 'node'];
+
 // ================= MIDDLEWARE =================
 app.use((req, res, next) => {
   console.log(`[DEBUG_REQ] ${req.method} ${req.url}`);
@@ -83,7 +89,7 @@ async function checkDependencies() {
   const dependencies = [
     { name: 'aria2c', flag: '--version' },
     { name: 'ffmpeg', flag: '-version' },
-    { name: 'yt-dlp', flag: '--version' }
+    { name: YT_DLP_BIN, flag: '--version' }
   ];
   const missing = [];
 
@@ -320,27 +326,14 @@ function isDomainAllowed(url) {
 
 function isVideoPlatform(url) {
   const platforms = [
-    'youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'twitch.tv'
+    'youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'twitch.tv',
+    'facebook.com', 'instagram.com', 'tiktok.com', 'pinterest.com',
+    'googlevideo.com', 'x.com', 'twitter.com', 'reddit.com'
   ];
   try {
-    const hostname = new URL(url).hostname;
-    return platforms.some(p => hostname.includes(p));
+    const urlLower = url.toLowerCase();
+    return platforms.some(p => urlLower.includes(p));
   } catch { return false; }
-}
-
-function isVideoPlatform(url) {
-  const platforms = [
-    'youtube.com/watch',
-    'youtu.be/',
-    'twitch.tv/',
-    'vimeo.com/',
-    'dailymotion.com/video',
-    'facebook.com/watch',
-    'instagram.com/p/',
-    'tiktok.com/',
-    'googlevideo.com' // direct Google video delivery links (videoplayback) - treat as video
-  ];
-  return platforms.some(platform => url.includes(platform));
 }
 
 // ================= ROUTES =================
@@ -547,8 +540,8 @@ app.post("/api/formats", async (req, res) => {
   }
 
   try {
-    const command = 'yt-dlp'; // Utiliser le yt-dlp du PATH
-    const args = ['--dump-json', '--batch-file', '-'];
+    const command = YT_DLP_BIN;
+    const args = [...YT_DLP_ARGS, '--dump-json', '--batch-file', '-'];
     log('INFO', 'Exécution de yt-dlp via stdin', { command: `${command} ${args.join(' ')}` });
 
     const formatsJson = await new Promise((resolve, reject) => {
@@ -622,6 +615,7 @@ function startDownload(id) {
 
     const format = formatCode || "bestvideo+bestaudio/best";
     const ytArgs = [
+      ...YT_DLP_ARGS,
       "--newline", "--no-playlist", "--format", format,
       "--merge-output-format", "mp4", "--output", path.join(downloadsDir, `${filename}.mp4`),
       url
@@ -629,7 +623,7 @@ function startDownload(id) {
     if (cookies) ytArgs.push("--add-header", `Cookie: ${cookies}`);
     if (noCheckCert) ytArgs.push("--no-check-certificate");
 
-    proc = spawn("yt-dlp", ytArgs);
+    proc = spawn(YT_DLP_BIN, ytArgs);
 
     proc.stdout.on("data", d => {
       const line = d.toString();

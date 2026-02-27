@@ -102,7 +102,7 @@ class TabStateManager {
 const stateManager = new TabStateManager();
 
 // URL Serveur par défaut
-let SERVER_URL = "http://localhost:3000";
+let SERVER_URL = "http://localhost:3002";
 
 // Charger l'URL configurée
 chrome.storage.local.get(['serverUrl'], (result) => {
@@ -115,7 +115,7 @@ chrome.storage.local.get(['serverUrl'], (result) => {
 // Écouter les changements de config
 chrome.storage.onChanged.addListener((changes, namespace) => {
   if (namespace === 'local' && changes.serverUrl) {
-    SERVER_URL = changes.serverUrl.newValue || "http://localhost:3000";
+    SERVER_URL = changes.serverUrl.newValue || "http://localhost:3002";
     console.log('[CONFIG] URL serveur mise à jour:', SERVER_URL);
   }
 });
