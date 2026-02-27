@@ -1,6 +1,6 @@
 /* ================= DESIGN SYSTEM (ElevenLabs Style) ================= */
 :root {
-  /* Core Colors */
+  /* Core Colors - Dark Mode */
   --bg-app: #0d0d0d;
   --bg-sidebar: #0d0d0d;
   --bg-card: #141414;
@@ -33,6 +33,51 @@
   
   /* Transitions */
   --transition-smooth: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Light Mode */
+[data-theme="light"] {
+  /* Core Colors - Light Mode */
+  --bg-app: #f8f9fa;
+  --bg-sidebar: #ffffff;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f8f9fa;
+  --bg-button-secondary: #f1f3f4;
+  
+  --text-primary: #212529;
+  --text-secondary: #495057;
+  --text-muted: #868e96;
+  --text-dim: #ced4da;
+  
+  --accent-primary: #000000;
+  --accent-secondary: #ffffff;
+  
+  --status-success: #10b981;
+  --status-error: #ef4444;
+  --status-info: #3b82f6;
+  --status-warning: #f59e0b;
+  
+  /* Borders */
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.15);
+}
+
+/* Theme toggle button */
+.theme-toggle {
+  background: var(--bg-button-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+
+.theme-toggle:hover {
+  background: var(--bg-card-hover);
 }
 
 /* ================= RESET & BASE ================= */
@@ -358,17 +403,38 @@ button {
 
 /* PROGRESS BAR */
 .progress-container {
-  height: 4px;
+  height: 20px;
   background-color: #222;
-  border-radius: 2px;
+  border-radius: 10px;
   overflow: hidden;
   margin-top: 16px;
+  position: relative;
 }
 
 .progress-fill {
   height: 100%;
-  background-color: white;
+  background: linear-gradient(90deg, #1a1a1a, #ffffff, #1a1a1a);
+  background-size: 200% 200%;
+  animation: progressAnimation 2s linear infinite;
   transition: width 0.3s ease;
+}
+
+@keyframes progressAnimation {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.progress-text {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 0.75rem;
+  color: var(--text-primary);
+  z-index: 2;
+  text-align: center;
+  font-weight: 600;
 }
 
 /* NOTIFICATION TOAST */
