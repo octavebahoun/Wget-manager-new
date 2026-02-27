@@ -102,7 +102,7 @@ class TabStateManager {
 const stateManager = new TabStateManager();
 
 // URL Serveur par défaut
-let SERVER_URL = "http://localhost:3000";
+let SERVER_URL = "http://localhost:3002";
 
 // Charger l'URL configurée
 chrome.storage.local.get(['serverUrl'], (result) => {
@@ -115,7 +115,7 @@ chrome.storage.local.get(['serverUrl'], (result) => {
 // Écouter les changements de config
 chrome.storage.onChanged.addListener((changes, namespace) => {
   if (namespace === 'local' && changes.serverUrl) {
-    SERVER_URL = changes.serverUrl.newValue || "http://localhost:3000";
+    SERVER_URL = changes.serverUrl.newValue || "http://localhost:3002";
     console.log('[CONFIG] URL serveur mise à jour:', SERVER_URL);
   }
 });
@@ -126,6 +126,51 @@ setInterval(() => {
 }, 30 * 60 * 1000);
 
 // ... (Le reste du code reste identique jusqu'à la fin du fichier où SERVER_URL est utilisé) ...
+
+// ================= NETWORK HANDLER =================
+// Mettre à jour le badge de l'icône
+async function updateBadge(tabId) {
+  const status = stateManager.getTabStatus(tabId);
+  let badgeText = "";
+  let badgeColor = BADGE_COLORS.INACTIVE;
+
+  if (status.hasDRM) {
+    badgeText = BADGE_TEXT.DRM;
+    badgeColor = BADGE_COLORS.DRM;
+  } else if (status.hasBlob) {
+    badgeText = BADGE_TEXT.BLOB;
+    badgeColor = BADGE_COLORS.BLOB;
+  } else if (status.streamCount > 0) {
+    badgeText = `${status.streamCount}`;
+    badgeColor = BADGE_COLORS.STREAM;
+  }
+
+  await chrome.action.setBadgeText({ text: badgeText, tabId });
+  await chrome.action.setBadgeBackgroundColor({ color: badgeColor, tabId });
+}
+
+// Écouter les requêtes réseau pour détecter les flux
+chrome.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    const { tabId, url } = details;
+    if (tabId < 0) return;
+
+    // Filtrer les URLs non pertinentes
+    const isM3U8 = url.includes('.m3u8');
+    const isMPD = url.includes('.mpd');
+
+    if (isM3U8 || isMPD) {
+      if (stateManager.addStream(tabId, url)) {
+        console.log(`[NET] Stream détecté (tab ${tabId}): ${url.substring(0, 100)}`);
+        updateBadge(tabId);
+      }
+    }
+  },
+  {
+    urls: ["<all_urls>"],
+    types: ["media", "xmlhttprequest", "other"]
+  }
+);
 
 // ================= COMMAND HANDLER =================
 chrome.commands.onCommand.addListener(async (command) => {

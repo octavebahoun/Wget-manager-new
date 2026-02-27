@@ -64,6 +64,12 @@ const MAX_CONCURRENT_DOWNLOADS = parseInt(process.env.MAX_CONCURRENT_DOWNLOADS |
 const RETRY_ATTEMPTS = parseInt(process.env.RETRY_ATTEMPTS || "2");
 const RETRY_DELAY = parseInt(process.env.RETRY_DELAY || "3000");
 
+// ================= TOOLS PATHS =================
+const YT_DLP_BIN = fsSync.existsSync(path.join(__dirname, 'bin', 'yt-dlp'))
+  ? path.join(__dirname, 'bin', 'yt-dlp')
+  : 'yt-dlp';
+const YT_DLP_ARGS = ['--js-runtimes', 'node'];
+
 // ================= MIDDLEWARE =================
 // Performance optimized middleware setup
 app.use(cors({
@@ -102,13 +108,30 @@ app.use((err, req, res, next) => {
 const downloadsDir = path.join(__dirname, "downloads");
 const STATE_FILE = path.join(__dirname, "active_downloads.json");
 const HISTORY_FILE = path.join(__dirname, "history.json");
+const RULES_FILE = path.join(__dirname, "rules.json");
+
+let fileRules = {};
+
+async function loadRules() {
+  try {
+    const content = await fs.readFile(RULES_FILE, 'utf8');
+    fileRules = JSON.parse(content);
+    log('SUCCESS', 'Règles de rangement chargées.');
+  } catch (e) {
+    if (e.code === 'ENOENT') {
+      log('INFO', 'Aucun fichier de règles (rules.json) trouvé, rangement automatique désactivé.');
+    } else {
+      log('ERROR', 'Erreur chargement rules.json', { error: e.message });
+    }
+  }
+}
 
 // ================= DEPENDENCY CHECK =================
 async function checkDependencies() {
   const dependencies = [
     { name: 'aria2c', flag: '--version' },
     { name: 'ffmpeg', flag: '-version' },
-    { name: 'yt-dlp', flag: '--version' }
+    { name: YT_DLP_BIN, flag: '--version' }
   ];
   const missing = [];
 
@@ -303,20 +326,28 @@ function defaultUA(ua) {
   return ua || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 }
 
-// ================= OPTIMIZED UTILITY FUNCTIONS =================
-// Pre-compiled regular expressions for better performance
-const FILENAME_SANITIZE_REGEX = /[^a-zA-Z0-9._-]/g;
-const VIDEO_PLATFORMS_REGEX = new RegExp([
-  'youtube\\.com/watch',
-  'youtu\\.be/',
-  'twitch\\.tv/',
-  'vimeo\\.com/',
-  'dailymotion\\.com/video',
-  'facebook\\.com/watch',
-  'instagram\\.com/p/',
-  'tiktok\\.com/',
-  'googlevideo\\.com'
-].join('|'));
+// ================= UTILITY FUNCTIONS =================
+const FALLBACK_TRACKERS = [
+  "udp://tracker.opentrackr.org:1337/announce", "udp://open.stealth.si:80/announce",
+  "udp://tracker.torrent.eu.org:451/announce", "udp://tracker.moeking.me:6969/announce",
+  "udp://exodus.desync.com:6969/announce", "udp://tracker.dler.org:6969/announce"
+];
+let BEST_TRACKERS = [...FALLBACK_TRACKERS];
+
+async function fetchTrackers() {
+  try {
+    const response = await fetch('https://newtrackon.com/api/stable');
+    if (!response.ok) throw new Error(`Status ${response.status}`);
+    const text = await response.text();
+    const trackers = text.trim().split('\n\n').filter(Boolean);
+    if (trackers.length > 5) {
+      BEST_TRACKERS = trackers;
+      log('SUCCESS', `Liste de trackers mise à jour: ${trackers.length} trackers chargés.`);
+    }
+  } catch (e) {
+    log('WARN', 'Impossible de récupérer la liste de trackers, utilisation de la liste de secours.', { error: e.message });
+  }
+}
 
 function sanitizeFilename(filename) {
   return filename.replace(FILENAME_SANITIZE_REGEX, "_").substring(0, 255);
@@ -331,6 +362,7 @@ function formatSize(bytes) {
 }
 
 function isAllowedProtocol(url) {
+  if (url.startsWith("magnet:")) return true;
   try {
     const protocol = new URL(url).protocol;
     return protocol === 'http:' || protocol === 'https:';
@@ -353,7 +385,15 @@ function isDomainAllowed(url) {
 }
 
 function isVideoPlatform(url) {
-  return VIDEO_PLATFORMS_REGEX.test(url);
+  const platforms = [
+    'youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'twitch.tv',
+    'facebook.com', 'instagram.com', 'tiktok.com', 'pinterest.com',
+    'googlevideo.com', 'x.com', 'twitter.com', 'reddit.com'
+  ];
+  try {
+    const urlLower = url.toLowerCase();
+    return platforms.some(p => urlLower.includes(p));
+  } catch { return false; }
 }
 
 // ================= ROUTES =================
@@ -371,12 +411,16 @@ app.get("/history", async (req, res) => {
   res.json(sortedHistory);
 });
 
-app.get("/transfer/:filename", async (req, res) => {
-  const filename = sanitizeFilename(req.params.filename);
-  const filePath = path.join(downloadsDir, filename);
+app.get(/^\/transfer\/(.+)/, async (req, res) => {
+  const relativePath = req.params[0];
+  const filename = path.basename(relativePath);
 
-  if (!fsSync.existsSync(filePath)) {
-    return res.status(404).json({ error: "Fichier introuvable" });
+  // Sécurité : s'assurer que le chemin ne remonte pas dans l'arborescence
+  const safePath = path.normalize(relativePath).replace(/^(\.\.(\/|\\|$))+/, '');
+  const filePath = path.join(downloadsDir, safePath);
+
+  if (!fsSync.existsSync(filePath) || !filePath.startsWith(downloadsDir)) {
+    return res.status(404).json({ error: "Fichier introuvable ou accès non autorisé" });
   }
 
   res.download(filePath, filename, async (err) => {
@@ -546,14 +590,71 @@ app.post("/api/capture", async (req, res) => {
   }
 });
 
+app.post("/api/formats", async (req, res) => {
+  const { url } = req.body;
+  log('INFO', 'Demande /api/formats reçue', { url });
+
+  if (!url || !isVideoPlatform(url)) {
+    log('WARN', 'URL invalide pour /api/formats', { url });
+    return res.status(400).json({ error: "URL de vidéo valide manquante" });
+  }
+
+  try {
+    const command = YT_DLP_BIN;
+    const args = [...YT_DLP_ARGS, '--dump-json', '--batch-file', '-'];
+    log('INFO', 'Exécution de yt-dlp via stdin', { command: `${command} ${args.join(' ')}` });
+
+    const formatsJson = await new Promise((resolve, reject) => {
+      const proc = spawn(command, args);
+      let stdout = '';
+      let stderr = '';
+
+      proc.stdout.on('data', (data) => stdout += data);
+      proc.stderr.on('data', (data) => stderr += data);
+
+      proc.on('close', (code) => {
+        log('INFO', 'yt-dlp terminé', { code });
+        if (code !== 0) {
+          log('ERROR', 'yt-dlp stderr', { stderr });
+          return reject(new Error(stderr || `yt-dlp a quitté avec le code ${code}`));
+        }
+        log('INFO', 'yt-dlp stdout', { stdout: stdout.substring(0, 100) + '...' });
+        resolve(stdout);
+      });
+
+      proc.stdin.write(url);
+      proc.stdin.end();
+    });
+
+    const data = JSON.parse(formatsJson);
+    const formats = data.formats.map(f => ({
+      formatId: f.format_id,
+      resolution: f.resolution,
+      ext: f.ext,
+      fps: f.fps,
+      vcodec: f.vcodec,
+      acodec: f.acodec,
+      fileSize: f.filesize || f.filesize_approx,
+      note: f.format_note,
+    })).filter(f => f.vcodec !== 'none' || f.acodec !== 'none');
+
+    res.json({ title: data.title, formats });
+
+  } catch (e) {
+    log('ERROR', 'Impossible de récupérer les formats', { error: e.message });
+    res.status(500).json({ error: "Impossible de récupérer les formats pour cette URL" });
+  }
+});
+
 // ================= DOWNLOAD LOGIC =================
 function startDownload(id) {
   const download = activeDownloads.get(id);
   if (!download) return;
 
-  const { url, filename, ua, referer, cookies, noCheckCert, singleSegment, forceVideo } = download.config;
+  const { url, filename, ua, referer, cookies, noCheckCert, singleSegment, forceVideo, formatCode } = download.config;
   let { retryCount } = download;
   const isVideo = !!forceVideo || isVideoPlatform(url);
+  const isTorrent = url.startsWith("magnet:");
 
   download.info.status = 'downloading';
   download.info.startedAt = new Date().toISOString();
@@ -561,34 +662,31 @@ function startDownload(id) {
 
   log('INFO', `Démarrage téléchargement: ${filename} (Retry: ${retryCount})`, {
     url: url.substring(0, 100),
-    type: isVideo ? 'video' : url.match(/\.(m3u8|mpd)/i) ? 'stream' : 'direct'
+    type: isVideo ? 'video' : isTorrent ? 'torrent' : url.match(/\.(m3u8|mpd)/i) ? 'stream' : 'direct'
   });
 
   let proc;
   let lastError = "";
   const isRetry = retryCount > 0;
 
-  if (isVideo) {
+  if (isVideo && !isTorrent) {
     // YT-DLP pour plateformes vidéo
     log('INFO', `Utilisation de yt-dlp${isRetry ? ' (retry ' + retryCount + ')' : ''}`);
 
+    const format = formatCode || "bestvideo+bestaudio/best";
     const ytArgs = [
-      "--newline",
-      "--no-playlist",
-      "--format", "bestvideo+bestaudio/best",
-      "--merge-output-format", "mp4",
-      "--output", path.join(downloadsDir, `${filename}.mp4`),
+      ...YT_DLP_ARGS,
+      "--newline", "--no-playlist", "--format", format,
+      "--merge-output-format", "mp4", "--output", path.join(downloadsDir, `${filename}.mp4`),
       url
     ];
-
     if (cookies) ytArgs.push("--add-header", `Cookie: ${cookies}`);
     if (noCheckCert) ytArgs.push("--no-check-certificate");
 
-    proc = spawn("yt-dlp", ytArgs);
+    proc = spawn(YT_DLP_BIN, ytArgs);
 
     proc.stdout.on("data", d => {
       const line = d.toString();
-
       const progress = line.match(/(\d+\.?\d*)%/);
       const size = line.match(/of\s+(~?[0-9.]+[KMGTiB]+)/);
       const speed = line.match(/at\s+([0-9.]+[KMGTiB]+\/s)/);
@@ -599,69 +697,48 @@ function startDownload(id) {
         if (size) download.info.fullSize = size[1];
         if (speed) download.info.speed = speed[1];
         if (eta) download.info.eta = eta[1];
-
         broadcast({ type: "update", download: download.info });
       }
     });
+    proc.stderr.on("data", d => { lastError += d.toString(); });
 
-    proc.stderr.on("data", d => {
-      lastError += d.toString();
-    });
-
-  } else if (url.match(/\.(m3u8|mpd)/i)) {
+  } else if (url.match(/\.(m3u8|mpd)/i) && !isTorrent) {
     // FFMPEG pour streams
     log('INFO', `Utilisation de ffmpeg${isRetry ? ' (retry ' + retryCount + ')' : ''}`);
-
     const ffmpegArgs = [
-      "-headers", `User-Agent: ${defaultUA(ua)}\r\n`,
-      "-i", url,
-      "-c", "copy",
-      "-bsf:a", "aac_adtstoasc",
-      path.join(downloadsDir, `${filename}.mp4`)
+      "-headers", `User-Agent: ${defaultUA(ua)}\r\n`, "-i", url, "-c", "copy",
+      "-bsf:a", "aac_adtstoasc", path.join(downloadsDir, `${filename}.mp4`)
     ];
-
     proc = spawn("ffmpeg", ffmpegArgs);
 
     proc.stderr.on("data", d => {
       const line = d.toString();
       const timeMatch = line.match(/time=(\d+):(\d+):(\d+)/);
-
       if (timeMatch) {
-        const hours = parseInt(timeMatch[1]);
-        const minutes = parseInt(timeMatch[2]);
-        const seconds = parseInt(timeMatch[3]);
-        const totalSeconds = hours * 3600 + minutes * 60 + seconds;
-
+        const totalSeconds = parseInt(timeMatch[1]) * 3600 + parseInt(timeMatch[2]) * 60 + parseInt(timeMatch[3]);
         download.info.eta = `${totalSeconds}s encodées`;
         download.info.progress = Math.min(99, Math.floor(totalSeconds / 10));
         broadcast({ type: "update", download: download.info });
       }
-
       lastError += line;
     });
 
   } else {
-    // ARIA2C pour téléchargements directs
+    // ARIA2C pour téléchargements directs et torrents
     log('INFO', `Utilisation d'aria2c${isRetry ? ' (retry ' + retryCount + ')' : ''}`);
+    const conns = Math.max(1, Math.min(parseInt(connections) || (isTorrent ? 4 : 16), 16));
 
     const args = [
-      "--console-log-level=notice",
-      "--summary-interval=1",
-      "--dir", downloadsDir,
-      "--out", filename,
-      "--user-agent", defaultUA(ua),
-      "--max-tries", "5",
-      "--retry-wait", "3"
+      "--console-log-level=notice", "--summary-interval=1", "--dir", downloadsDir,
+      "--out", filename, "--user-agent", defaultUA(ua), "--max-tries", "5", "--retry-wait", "3",
+      `--max-connection-per-server=${conns}`, `--split=${conns}`
     ];
 
-    if (referer) args.push("--referer", referer);
-
-    if (isVideo || isRetry || singleSegment) {
-      args.push("--max-connection-per-server=1", "--split=1");
-    } else {
-      args.push("--max-connection-per-server=16", "--split=16");
+    if (referer && !isTorrent) args.push("--referer", referer);
+    if (isTorrent) {
+      args.push("--bt-tracker=" + BEST_TRACKERS.join(','));
+      args.push("--seed-time=0");
     }
-
     if (cookies) args.push("--header", `Cookie: ${cookies}`);
     if (noCheckCert) args.push("--check-certificate=false");
 
@@ -714,20 +791,51 @@ function startDownload(id) {
       download.info.progress = 100;
       download.info.completedAt = new Date().toISOString();
 
+      const finalFilename = filename + (isVideo && !isTorrent ? '.mp4' : '');
+      const originalPath = path.join(downloadsDir, finalFilename);
+
       try {
-        const stats = await fs.stat(path.join(downloadsDir, filename + (isVideo ? '.mp4' : '')));
+        const stats = await fs.stat(originalPath);
         download.info.fullSize = formatSize(stats.size);
         download.info.sizeBytes = stats.size;
-      } catch (e) { }
+      } catch (e) { log('WARN', 'Impossible de lire la taille du fichier', { file: finalFilename }); }
 
-      log('SUCCESS', `Téléchargement terminé: ${filename}`, {
+      // --- RANGEMENT AUTOMATIQUE ---
+      const extension = path.extname(finalFilename).substring(1);
+      let targetDir = downloadsDir;
+      let targetPath = originalPath;
+
+      for (const [folder, extensions] of Object.entries(fileRules)) {
+        if (extensions.includes(extension)) {
+          targetDir = path.join(downloadsDir, folder);
+          break;
+        }
+      }
+
+      if (targetDir !== downloadsDir) {
+        try {
+          await fs.mkdir(targetDir, { recursive: true });
+          targetPath = path.join(targetDir, finalFilename);
+          await fs.rename(originalPath, targetPath);
+          download.info.filename = path.join(path.basename(targetDir), finalFilename); // Mettre à jour le chemin relatif
+          log('INFO', `Fichier rangé dans: ${targetDir}`);
+        } catch (e) {
+          log('ERROR', 'Erreur rangement fichier', { error: e.message, file: finalFilename });
+          download.info.filename = finalFilename; // Fallback au nom original
+        }
+      } else {
+         download.info.filename = finalFilename;
+      }
+      // --- FIN RANGEMENT ---
+
+      log('SUCCESS', `Téléchargement terminé: ${download.info.filename}`, {
         size: download.info.fullSize
       });
 
       // AJOUT HISTORY
       const historyItem = { ...download.info, date: new Date().toISOString() };
       historyList.push(historyItem);
-      saveHistory();
+      await saveHistory();
 
       activeDownloads.delete(id);
       broadcast({ type: "status-change", download: download.info });
@@ -783,7 +891,7 @@ function startDownload(id) {
 
 // ================= DOWNLOAD HANDLER =================
 app.post("/download", async (req, res) => {
-  const { url, referer, ua, noCheckCert, customFilename, singleSegment, cookies } = req.body;
+  let { url, referer, ua, noCheckCert, customFilename, singleSegment, cookies, connections, formatCode } = req.body;
 
   // Validation basique
   if (!url) {
@@ -793,11 +901,11 @@ app.post("/download", async (req, res) => {
   // Validation protocole
   if (!isAllowedProtocol(url)) {
     log('ERROR', 'Protocole non autorisé', { url });
-    return res.status(400).json({ error: "Protocole non autorisé (http/https uniquement)" });
+    return res.status(400).json({ error: "Protocole non autorisé (http/https ou magnet)" });
   }
 
-  // Validation domaine
-  if (!isDomainAllowed(url)) {
+  // Validation domaine (skip for magnets)
+  if (!url.startsWith("magnet:") && !isDomainAllowed(url)) {
     const hostname = new URL(url).hostname;
     log('WARN', `Domaine non autorisé: ${hostname}`);
     return res.status(403).json({ error: `Domaine non autorisé: ${hostname}` });
@@ -901,12 +1009,12 @@ app.post("/download", async (req, res) => {
   };
 
   const downloadConfig = {
-    url, referer, ua, noCheckCert, customFilename, singleSegment, cookies, filename, forceVideo
+    url, referer, ua, noCheckCert, customFilename, singleSegment, cookies, filename, forceVideo, connections, formatCode
   };
 
   log('INFO', `Nouveau téléchargement en file d'attente: ${filename}`, {
     url: url.substring(0, 100),
-    type: isVideoPlatform(url) ? 'video' : url.match(/\.(m3u8|mpd)/i) ? 'stream' : 'direct'
+    type: isVideoPlatform(url) ? 'video' : url.startsWith("magnet:") ? 'torrent' : url.match(/\.(m3u8|mpd)/i) ? 'stream' : 'direct'
   });
 
   // Stocker le processus
@@ -930,6 +1038,8 @@ let server;
 
 async function startServer() {
   try {
+    await fetchTrackers();
+    await loadRules();
     await checkDependencies(); // AJOUTÉ
     await ensureDirectories();
     await loadState();

@@ -71,21 +71,27 @@ const elements = {
   urlInput: document.getElementById('urlInput'),
   uaInput: document.getElementById('uaInput'),
   submitBtn: document.getElementById('submitBtn'),
+  analyzeBtn: document.getElementById('analyzeBtn'),
+  formatSelection: document.getElementById('formatSelection'),
+  formatList: document.getElementById('formatList'),
   advToggle: document.getElementById('advToggle'),
   advOptions: document.getElementById('advOptions'),
   activeList: document.getElementById('activeList'),
   historyList: document.getElementById('historyList'),
   cancelAllBtn: document.getElementById('cancelAllBtn'),
   clearHistoryBtn: document.getElementById('clearHistoryBtn'),
-  refreshActiveBtn: document.getElementById('refreshActiveBtn'),
-  refreshHistoryBtn: document.getElementById('refreshHistoryBtn'),
-  paginationControls: document.getElementById('paginationControls'),
-  prevPageBtn: document.getElementById('prevPage'),
-  nextPageBtn: document.getElementById('nextPage'),
-  currentPageSpan: document.getElementById('currentPage'),
-  totalPagesSpan: document.getElementById('totalPages'),
-  connectionStatus: document.getElementById('connectionStatus'),
-  toastContainer: document.getElementById('toastContainer')
+  refreshAllBtn: document.getElementById('refreshAllBtn'),
+  statusIndicator: document.getElementById('statusIndicator'),
+  statusText: document.getElementById('statusText'),
+  toastContainer: document.getElementById('toastContainer'),
+  // Sections and Nav
+  navHome: document.getElementById('navHome'),
+  navDownloads: document.getElementById('navDownloads'),
+  navHistory: document.getElementById('navHistory'),
+  sectionNew: document.getElementById('sectionNew'),
+  sectionActive: document.getElementById('sectionActive'),
+  sectionHistory: document.getElementById('sectionHistory'),
+  pageTitle: document.getElementById('pageTitle')
 };
 
 // ================= OPTIMIZED UTILITY FUNCTIONS =================
@@ -360,17 +366,14 @@ class SSEManager {
   }
 
   updateConnectionStatus(connected) {
-    const statusEl = elements.connectionStatus;
-    if (!statusEl) return;
+    if (!elements.statusIndicator) return;
 
     if (connected) {
-      statusEl.classList.remove('offline');
-      statusEl.classList.add('online');
-      statusEl.querySelector('.status-text').textContent = 'Connecté';
+      elements.statusIndicator.className = 'indicator indicator-online';
+      elements.statusText.textContent = 'Connecté';
     } else {
-      statusEl.classList.remove('online');
-      statusEl.classList.add('offline');
-      statusEl.querySelector('.status-text').textContent = 'Déconnecté';
+      elements.statusIndicator.className = 'indicator indicator-offline';
+      elements.statusText.textContent = 'Déconnecté';
     }
   }
 
@@ -389,112 +392,75 @@ function updateDownloadUI(download) {
   let el = document.getElementById(`dl-${download.id}`);
 
   if (!el) {
-    // Supprimer le message "En attente"
-    const emptyState = elements.activeList.querySelector('.empty-state');
-    if (emptyState) emptyState.remove();
+    // Supprimer le message vide
+    if (elements.activeList.querySelector('.card')) {
+      elements.activeList.innerHTML = '';
+    }
 
-    // Créer le nouvel élément
     el = document.createElement('div');
     el.id = `dl-${download.id}`;
-    el.className = 'download-item';
+    el.className = 'card agent-card';
     elements.activeList.prepend(el);
   }
 
   const status = download.status;
   const isDone = status === 'completed';
   const isError = status === 'error';
-  const isInterrupted = status === 'interrupted';
-  const isCancelled = status === 'cancelled';
-  const isRetrying = status === 'retrying';
-
-  const statusIcon = STATUS_ICONS[status] || 'fa-question-circle';
-  const statusLabel = STATUS_LABELS[status] || 'Inconnu';
+  const progress = download.progress || 0;
+  const eta = download.eta || '--';
+  const speed = download.speed || '0 KB/s';
 
   el.innerHTML = `
-    <div class="download-header">
-      <div class="file-info">
-        <div class="file-icon">
+    <div class="card-header">
+      <div class="card-title-group">
+        <div class="card-icon">
           <i class="fas ${getFileIcon(download.filename)}"></i>
         </div>
-        <div class="file-details">
-          ${isDone
-      ? `<a href="/transfer/${download.filename}" class="file-name download-link" title="Récupérer et supprimer du serveur">
-                ${download.filename}
-                <i class="fas fa-download"></i>
-              </a>`
-      : `<div class="file-name">${download.filename}</div>`
-    }
-          <div class="file-url" title="${download.url}">${download.url}</div>
+        <div>
+          <h3 class="card-name">${download.filename}</h3>
+          <p class="card-description" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px;">
+            ${download.url}
+          </p>
         </div>
       </div>
-      <div class="download-actions">
-        <span class="status-badge status-${status}">
-          <i class="fas ${statusIcon}"></i>
-          ${statusLabel}
+      <div class="agent-check">
+        <i class="fas fa-check"></i>
+      </div>
+    </div>
+    
+    <div style="margin-top: 12px;">
+      <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 8px;">
+        <span>${speed}</span>
+        <span>${eta}</span>
+      </div>
+      
+      <div class="progress-container">
+        <div class="progress-fill" style="width: ${progress}%"></div>
+      </div>
+      
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px;">
+        <span class="card-badge" style="color: ${isError ? 'var(--status-error)' : 'white'}">
+          ${STATUS_LABELS[status] || status}
         </span>
         ${status === 'downloading'
-      ? `<button class="btn-icon btn-danger" onclick="cancelDownload('${download.id}')" title="Annuler">
-              <i class="fas fa-times"></i>
-            </button>`
+      ? `<button class="btn btn-outline btn-danger" onclick="cancelDownload('${download.id}')" style="padding: 4px 8px; font-size: 0.75rem;">
+               Annuler
+             </button>`
       : ''
     }
       </div>
     </div>
-
-    ${!isDone && !isCancelled
-      ? `<div class="progress-container">
-          <div class="progress-bar" style="width: ${download.progress}%">
-            <span class="progress-text">${download.progress}%</span>
-          </div>
-        </div>`
-      : ''
-    }
-
-    <div class="download-stats">
-      <div class="stat-item">
-        <span class="stat-label">Progression</span>
-        <span class="stat-value">${download.progress}%</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">Vitesse</span>
-        <span class="stat-value">${isDone ? '---' : (download.speed || '0 KB/s')}</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">Taille</span>
-        <span class="stat-value">${download.currentSize || '0 B'} / ${download.fullSize || '???'}</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">Temps restant</span>
-        <span class="stat-value">${isDone ? '0s' : (download.eta || '--')}</span>
-      </div>
-    </div>
-
-    ${(isError || isInterrupted)
-      ? `<div class="error-message">
-          <i class="fas fa-exclamation-triangle"></i>
-          ${download.error || "Arrêt inattendu"}
-        </div>`
-      : ''
-    }
   `;
 
-  // Auto-hide pour succès et annulation
-  if (isDone || isCancelled) {
+  // Auto-hide
+  if (isDone || status === 'cancelled') {
     setTimeout(() => {
       el.style.opacity = '0';
-      el.style.transform = 'translateX(20px)';
       setTimeout(() => {
         el.remove();
         state.removeActiveDownload(download.id);
-
-        // Remettre l'empty state si plus de downloads
         if (state.activeDownloads.size === 0) {
-          elements.activeList.innerHTML = `
-            <div class="empty-state">
-              <i class="fas fa-cloud-download-alt"></i>
-              <p>En attente de nouveaux téléchargements...</p>
-            </div>
-          `;
+          elements.activeList.innerHTML = '<div class="card" style="grid-column: 1/-1; text-align: center; padding: 40px; color: var(--text-muted);">Aucun téléchargement actif</div>';
         }
       }, 500);
     }, CONFIG.AUTO_HIDE_DELAY);
@@ -558,34 +524,33 @@ async function loadHistory(page = 1) {
     // Affichage
     if (pageData.length === 0) {
       elements.historyList.innerHTML = `
-        <div class="empty-state">
-          <i class="fas fa-folder-open"></i>
-          <p>Aucun fichier dans la bibliothèque</p>
+        <div class="card" style="grid-column: 1/-1; text-align: center; padding: 40px; color: var(--text-muted);">
+          La bibliothèque est vide
         </div>
       `;
     } else {
       elements.historyList.innerHTML = pageData.map(item => `
-        <div class="download-item completed">
-          <div class="download-header">
-            <div class="file-info">
-              <div class="file-icon success">
+        <div class="card agent-card">
+          <div class="card-header">
+            <div class="card-title-group">
+              <div class="card-icon">
                 <i class="fas ${getFileIcon(item.filename)}"></i>
               </div>
-              <div class="file-details">
-                <a href="/files/${item.filename}" target="_blank" class="file-name download-link">
-                  ${item.filename}
+              <div>
+                <a href="/files/${item.filename}" target="_blank">
+                   <h3 class="card-name">${item.filename}</h3>
                 </a>
-                <div class="file-meta">
-                  <span>${formatFileSize(item.size)}</span>
-                  <span class="meta-separator">•</span>
-                  <span>${formatDate(item.date)}</span>
-                </div>
+                <p class="card-description">${formatFileSize(item.size)} • ${formatDate(item.date)}</p>
               </div>
             </div>
-            <span class="status-badge status-completed">
+            <div class="agent-check" style="opacity: 1;">
               <i class="fas fa-check"></i>
-              Terminé
-            </span>
+            </div>
+          </div>
+          <div style="margin-top: 12px; display: flex; gap: 8px;">
+             <a href="/files/${item.filename}" target="_blank" class="btn btn-outline" style="flex: 1; justify-content: center; font-size: 0.8rem; padding: 6px;">
+                Ouvrir
+             </a>
           </div>
         </div>
       `).join('');
@@ -640,11 +605,86 @@ async function clearHistory() {
 }
 
 // ================= FORM SUBMISSION =================
+// ================= FORMAT ANALYSIS =================
+function isVideoPlatform(url) {
+  const platforms = ['youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'twitch.tv'];
+  try {
+    const hostname = new URL(url).hostname;
+    return platforms.some(p => hostname.includes(p));
+  } catch { return false; }
+}
+
+function onUrlInputChange() {
+  const url = elements.urlInput.value.trim().split(/\s+/)[0];
+  if (isVideoPlatform(url) && elements.urlInput.value.trim().split(/\s+/).length === 1) {
+    elements.analyzeBtn.style.display = 'block';
+  } else {
+    elements.analyzeBtn.style.display = 'none';
+    elements.formatSelection.style.display = 'none';
+  }
+}
+
+async function analyzeFormats() {
+  const url = elements.urlInput.value.trim();
+  if (!url) {
+    toast.warning("Veuillez entrer une URL à analyser.");
+    return;
+  }
+
+  elements.analyzeBtn.disabled = true;
+  elements.analyzeBtn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Analyse...`;
+
+  try {
+    const response = await fetch('/api/formats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+
+    if (!response.ok) {
+      const data = await response.json();
+      throw new Error(data.error || 'Erreur inconnue');
+    }
+
+    const data = await response.json();
+    displayFormats(data.formats);
+  } catch (e) {
+    toast.error(`Erreur d'analyse: ${e.message}`);
+    elements.formatSelection.style.display = 'none';
+  } finally {
+    elements.analyzeBtn.disabled = false;
+    elements.analyzeBtn.innerHTML = `<i class="fas fa-search"></i> Analyser les qualités`;
+  }
+}
+
+function displayFormats(formats) {
+  if (!formats || formats.length === 0) {
+    elements.formatList.innerHTML = '<p>Aucun format vidéo/audio trouvé.</p>';
+    elements.formatSelection.style.display = 'block';
+    return;
+  }
+
+  elements.formatList.innerHTML = formats.map((f, index) => {
+    const label = `${f.resolution || ''} ${f.ext} (${f.note || 'Audio'}) - ${formatFileSize(f.fileSize)}`;
+    return `
+      <div class="format-item">
+        <input type="radio" id="format-${index}" name="formatCode" value="${f.formatId}" ${index === 0 ? 'checked' : ''}>
+        <label for="format-${index}">${label}</label>
+      </div>
+    `;
+  }).join('');
+
+  elements.formatSelection.style.display = 'block';
+}
+
+
+// ================= FORM SUBMISSION =================
 async function handleFormSubmit(e) {
   e.preventDefault();
 
   const formData = new FormData(e.target);
   const urlsText = formData.get('url').trim();
+  const selectedFormat = formData.get('formatCode');
 
   if (!urlsText) {
     toast.warning('Veuillez entrer au moins une URL');
@@ -652,6 +692,11 @@ async function handleFormSubmit(e) {
   }
 
   const urls = urlsText.split(/\s+/).filter(u => u.trim());
+
+  if (urls.length > 1 && selectedFormat) {
+    toast.warning("Le choix de la qualité n'est disponible que pour une seule URL à la fois.");
+    return;
+  }
 
   elements.submitBtn.disabled = true;
   elements.submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>Traitement...</span>';
@@ -661,24 +706,16 @@ async function handleFormSubmit(e) {
 
   for (const url of urls) {
     try {
-      // Validation URL
-      const urlObj = new URL(url);
-      const hostname = urlObj.hostname;
-
-      // Vérifier domaine autorisé
-      if (state.allowedDomains.length > 0) {
-        const isAllowed = state.allowedDomains.some(d =>
-          hostname === d || hostname.endsWith('.' + d)
-        );
-
-        if (!isAllowed) {
+      if (!url.startsWith('magnet:')) {
+        const urlObj = new URL(url);
+        const hostname = urlObj.hostname;
+        if (state.allowedDomains.length > 0 && !state.allowedDomains.some(d => hostname === d || hostname.endsWith('.' + d))) {
           toast.error(`Domaine non autorisé: ${hostname}`);
           errorCount++;
           continue;
         }
       }
 
-      // Envoyer la requête
       const response = await fetch('/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -689,7 +726,9 @@ async function handleFormSubmit(e) {
           ua: formData.get('ua'),
           noCheckCert: formData.get('noCheckCert') === 'on',
           singleSegment: formData.get('singleSegment') === 'on',
-          cookies: formData.get('cookies')
+          cookies: formData.get('cookies'),
+          connections: formData.get('connections'),
+          formatCode: selectedFormat
         })
       });
 
@@ -707,9 +746,9 @@ async function handleFormSubmit(e) {
     }
   }
 
-  // Reset form
   e.target.reset();
-  elements.uaInput.value = navigator.userAgent;
+  if (elements.uaInput) elements.uaInput.value = navigator.userAgent;
+  elements.formatSelection.style.display = 'none';
 
   // Feedback
   if (successCount > 0) {
@@ -735,92 +774,65 @@ async function loadConfig() {
   }
 }
 
-// ================= EVENT LISTENERS =================
-function initializeEventListeners() {
-  // Form submission
-  elements.downloadForm.addEventListener('submit', handleFormSubmit);
-
-  // Advanced toggle
-  elements.advToggle.addEventListener('click', () => {
-    elements.advOptions.classList.toggle('show');
-    const icon = elements.advToggle.querySelector('.toggle-icon');
-    icon.style.transform = elements.advOptions.classList.contains('show')
-      ? 'rotate(180deg)'
-      : 'rotate(0deg)';
+// ================= NAVIGATION =================
+function showSection(sectionId) {
+  // Update UI sections
+  [elements.sectionNew, elements.sectionActive, elements.sectionHistory].forEach(s => {
+    if (s) s.classList.add('hidden');
   });
 
-  // Cancel all
-  elements.cancelAllBtn.addEventListener('click', cancelAllDownloads);
+  const target = document.getElementById(`section${sectionId}`);
+  if (target) target.classList.remove('hidden');
 
-  // Clear history
-  elements.clearHistoryBtn.addEventListener('click', clearHistory);
-
-  // Refresh buttons
-  elements.refreshActiveBtn?.addEventListener('click', () => {
-    toast.info('Actualisation...');
-    location.reload();
+  // Update nav active state
+  [elements.navHome, elements.navDownloads, elements.navHistory].forEach(n => {
+    if (n) n.classList.remove('active');
   });
 
-  elements.refreshHistoryBtn?.addEventListener('click', () => {
-    loadHistory(state.currentPage);
-    toast.info('Historique actualisé');
-  });
+  const navTarget = document.getElementById(`nav${sectionId}`);
+  if (navTarget) navTarget.classList.add('active');
 
-  // Pagination
-  elements.prevPageBtn.addEventListener('click', () => {
-    if (state.currentPage > 1) {
-      loadHistory(state.currentPage - 1);
-    }
-  });
-
-  elements.nextPageBtn.addEventListener('click', () => {
-    const totalPages = Math.ceil(state.historyData.length / CONFIG.ITEMS_PER_PAGE);
-    if (state.currentPage < totalPages) {
-      loadHistory(state.currentPage + 1);
-    }
-  });
-
-  // Settings button (placeholder)
-  document.getElementById('settingsBtn')?.addEventListener('click', () => {
-    toast.info('Paramètres à venir...');
-  });
-}
-
-// ================= INITIALIZATION =================
-async function initialize() {
-  console.log('[APP] Initialisation...');
-
-  // Set default UA
-  elements.uaInput.value = navigator.userAgent;
-
-  // Initialize event listeners
-  initializeEventListeners();
-
-  // Load config
-  await loadConfig();
-
-  // Load history
-  await loadHistory();
-
-  // Connect SSE
-  sseManager = new SSEManager();
-
-  console.log('[APP] Prêt');
-}
-
-// ================= CLEANUP =================
-window.addEventListener('beforeunload', () => {
-  if (sseManager) {
-    sseManager.disconnect();
+  // Update title
+  const titles = { Home: 'Maison', Downloads: 'Téléchargements', History: 'Bibliothèque' };
+  if (elements.pageTitle) {
+    elements.pageTitle.textContent = titles[sectionId] || 'Tableau de bord';
   }
+}
+
+// ================= EVENT LISTENERS =================
+function initEventListeners() {
+  // Navigation
+  if (elements.navHome) elements.navHome.addEventListener('click', (e) => { e.preventDefault(); showSection('Home'); });
+  if (elements.navDownloads) elements.navDownloads.addEventListener('click', (e) => { e.preventDefault(); showSection('Downloads'); });
+  if (elements.navHistory) elements.navHistory.addEventListener('click', (e) => { e.preventDefault(); showSection('History'); });
+
+  const newBtn = document.getElementById('newDownloadBtn');
+  if (newBtn) newBtn.addEventListener('click', () => showSection('Home'));
+
+  // Form & Analysis
+  if (elements.downloadForm) elements.downloadForm.addEventListener('submit', handleFormSubmit);
+  if (elements.urlInput) elements.urlInput.addEventListener('input', onUrlInputChange);
+  if (elements.analyzeBtn) elements.analyzeBtn.addEventListener('click', analyzeFormats);
+  if (elements.advToggle) elements.advToggle.addEventListener('click', () => elements.advOptions.classList.toggle('hidden'));
+
+  // Actions
+  if (elements.cancelAllBtn) elements.cancelAllBtn.addEventListener('click', cancelAllDownloads);
+  if (elements.clearHistoryBtn) elements.clearHistoryBtn.addEventListener('click', clearHistory);
+  if (elements.refreshAllBtn) elements.refreshAllBtn.addEventListener('click', () => {
+    loadHistory();
+    toast.info('Actualisation...');
+  });
+}
+
+// ================= INIT =================
+window.addEventListener('DOMContentLoaded', () => {
+  initEventListeners();
+  if (elements.uaInput) elements.uaInput.value = navigator.userAgent;
+  sseManager = new SSEManager();
+  loadConfig();
+  loadHistory();
+  showSection('Home');
 });
 
-// ================= START =================
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initialize);
-} else {
-  initialize();
-}
-
-// ================= EXPOSE FOR INLINE HANDLERS =================
+// Expose for context
 window.cancelDownload = cancelDownload;

@@ -13,6 +13,16 @@
 .vscode/
 .idea/
 
-# Dependencies
-node_modules/
-```
+# Extension artifacts & keys
+*.crx
+*.pem
+extension.crx
+extension.pem
+
+# App data / downloads
+active_downloads.json
+downloads/
+
+# Misc
+coverage/
+.cache/server.out
