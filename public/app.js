@@ -81,6 +81,7 @@ const elements = {
   cancelAllBtn: document.getElementById('cancelAllBtn'),
   clearHistoryBtn: document.getElementById('clearHistoryBtn'),
   refreshAllBtn: document.getElementById('refreshAllBtn'),
+  themeToggle: document.getElementById('themeToggle'),
   statusIndicator: document.getElementById('statusIndicator'),
   statusText: document.getElementById('statusText'),
   toastContainer: document.getElementById('toastContainer'),
@@ -99,6 +100,56 @@ const elements = {
 const FILENAME_SANITIZE_REGEX = /[<>:"/\\|?*\x00-\x1F]/g;
 const FILE_EXTENSION_REGEX = /\.([^.]+)$/;
 const PROTOCOL_REGEX = /^(https?|magnet:)/;
+
+// Theme management with persistence
+function initializeTheme() {
+  const savedTheme = localStorage.getItem('theme');
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  
+  if (savedTheme) {
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    updateThemeToggle(savedTheme);
+  } else if (prefersDark) {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    updateThemeToggle('dark');
+  }
+}
+
+function toggleTheme() {
+  const currentTheme = document.documentElement.getAttribute('data-theme');
+  const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+  
+  document.documentElement.setAttribute('data-theme', newTheme);
+  localStorage.setItem('theme', newTheme);
+  updateThemeToggle(newTheme);
+}
+
+function updateThemeToggle(theme) {
+  if (elements.themeToggle) {
+    if (theme === 'light') {
+      elements.themeToggle.innerHTML = '<i class="fas fa-moon"></i> Mode Sombre';
+    } else {
+      elements.themeToggle.innerHTML = '<i class="fas fa-sun"></i> Mode Clair';
+    }
+  }
+}
+
+// URL input persistence
+function saveUrlInput() {
+  const urlValue = elements.urlInput ? elements.urlInput.value : '';
+  if (urlValue) {
+    localStorage.setItem('lastUrlInput', urlValue);
+  }
+}
+
+function loadUrlInput() {
+  if (elements.urlInput) {
+    const savedUrl = localStorage.getItem('lastUrlInput');
+    if (savedUrl) {
+      elements.urlInput.value = savedUrl;
+    }
+  }
+}
 
 function isAllowedProtocol(url) {
   return PROTOCOL_REGEX.test(url);
@@ -289,25 +340,34 @@ class SSEManager {
   constructor() {
     this.eventSource = null;
     this.reconnectTimeout = null;
+    this.lastEventTime = Date.now();
+    this.heartbeatInterval = null;
     this.connect();
   }
 
   connect() {
     try {
-      this.eventSource = new EventSource('/events');
+      // Add timestamp to prevent caching
+      const timestamp = Date.now();
+      this.eventSource = new EventSource(`/events?t=${timestamp}`);
 
       this.eventSource.onopen = () => {
         console.log('[SSE] Connecté');
         state.isConnected = true;
         state.reconnectAttempts = 0;
+        this.lastEventTime = Date.now();
         this.updateConnectionStatus(true);
         toast.success('Connexion établie');
+        
+        // Start heartbeat check
+        this.startHeartbeatCheck();
       };
 
       this.eventSource.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
           this.handleMessage(data);
+          this.lastEventTime = Date.now(); // Update last event time
         } catch (e) {
           console.error('[SSE] Erreur parsing:', e);
         }
@@ -317,11 +377,39 @@ class SSEManager {
         console.error('[SSE] Erreur connexion:', error);
         state.isConnected = false;
         this.updateConnectionStatus(false);
+        this.stopHeartbeatCheck();
         this.reconnect();
       };
     } catch (e) {
       console.error('[SSE] Erreur création:', e);
       this.reconnect();
+    }
+  }
+
+  startHeartbeatCheck() {
+    // Clear existing interval if any
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+    }
+    
+    // Check every 30 seconds if we've received events recently
+    this.heartbeatInterval = setInterval(() => {
+      const now = Date.now();
+      // If no event received in the last 60 seconds, consider connection dead
+      if ((now - this.lastEventTime) > 60000 && state.isConnected) {
+        console.warn('[SSE] No events received for 60s, reconnecting...');
+        state.isConnected = false;
+        this.updateConnectionStatus(false);
+        this.disconnect();
+        this.reconnect();
+      }
+    }, 30000); // Check every 30 seconds
+  }
+
+  stopHeartbeatCheck() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
     }
   }
 
@@ -383,6 +471,10 @@ class SSEManager {
   }
 
   disconnect() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
     if (this.eventSource) {
       this.eventSource.close();
     }
@@ -441,6 +533,9 @@ function updateDownloadUI(download) {
       
       <div class="progress-container">
         <div class="progress-fill" style="width: ${progress}%"></div>
+        <div class="progress-text" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.75rem; color: var(--text-primary); z-index: 2; text-align: center;">
+          ${Math.round(progress)}%
+        </div>
       </div>
       
       <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px;">
@@ -844,8 +939,15 @@ function initEventListeners() {
 
 // ================= INIT =================
 window.addEventListener('DOMContentLoaded', () => {
+  initializeTheme();
   initEventListeners();
   if (elements.uaInput) elements.uaInput.value = navigator.userAgent;
+  if (elements.themeToggle) elements.themeToggle.addEventListener('click', toggleTheme);
+  if (elements.urlInput) {
+    loadUrlInput();
+    elements.urlInput.addEventListener('blur', saveUrlInput);
+    elements.urlInput.addEventListener('change', saveUrlInput);
+  }
   sseManager = new SSEManager();
   loadConfig();
   loadHistory();
