@@ -465,6 +465,7 @@ function startDownload(id) {
       "--no-playlist",
       "--format", "bestvideo+bestaudio/best",
       "--merge-output-format", "mp4",
+      "--extractor-args", "youtube:player_client=default,android,ios,tv",
       "--output", path.join(downloadsDir, `${filename}.mp4`),
       url
     ];
