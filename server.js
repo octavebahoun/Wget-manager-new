@@ -1,844 +1,518 @@
-require("dotenv").config();
-const express = require("express");
-const cors = require("cors");
-const { spawn } = require("child_process");
-const path = require("path");
-const fs = require("fs").promises;
-const fsSync = require("fs");
-const { v4: uuidv4 } = require("uuid");
+'use strict';
+// Web Wget Pro — serveur de téléchargement (aria2c + yt-dlp + ffmpeg)
+const express = require('express');
+const cors = require('cors');
+const crypto = require('crypto');
+const path = require('path');
+const fsp = require('fs').promises;
+
+const config = require('./lib/config');
+const { log } = require('./lib/logger');
+const { binaries, detectBinaries, ytdlpAgeDays } = require('./lib/tools');
+const { JobManager } = require('./lib/jobs');
+const { analyze } = require('./lib/analyze');
+const { checkUrl } = require('./lib/net');
+const { normalizeUrl, extractUrl } = require('./lib/detect');
+const { normalizeCookieJar } = require('./lib/cookies');
+const util = require('./lib/util');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const jobs = new JobManager();
+const serverOrigins = new Set();
+let server = null;
 
-// ================= LOGGING =================
-const LOG_LEVELS = {
-  INFO: '\x1b[36m[INFO]\x1b[0m',
-  WARN: '\x1b[33m[WARN]\x1b[0m',
-  ERROR: '\x1b[31m[ERROR]\x1b[0m',
-  SUCCESS: '\x1b[32m[SUCCESS]\x1b[0m'
-};
+app.disable('x-powered-by');
 
-async function log(level, message, data = null) {
-  const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-  const logMessage = `${timestamp} ${LOG_LEVELS[level]} ${message}`;
-  console.log(logMessage);
-  if (data) console.log('  ↳', data);
-
-  const logEntry = `${timestamp} [${level}] ${message}${data ? ' | ' + JSON.stringify(data) : ''}\n`;
-  try {
-    await fs.appendFile(path.join(__dirname, 'server.log'), logEntry, 'utf8');
-  } catch (err) {
-    console.error('Erreur écriture log:', err);
-  }
+// ================= SÉCURITÉ =================
+function isAllowedOrigin(origin, req) {
+  if (!origin) return true;
+  if (/^(chrome|moz|safari-web)-extension:\/\//.test(origin)) return true;
+  if (config.ALLOWED_ORIGINS.includes(origin.toLowerCase())) return true;
+  if (serverOrigins.has(origin)) return true;
+  const host = req.headers.host;
+  return origin === `http://${host}` || origin === `https://${host}`;
 }
 
-// ================= CONFIG =================
-const ALLOWED_DOMAINS = process.env.ALLOWED_DOMAINS ? process.env.ALLOWED_DOMAINS.split(",") : [];
-const DOWNLOAD_TIMEOUT = parseInt(process.env.DOWNLOAD_TIMEOUT || "3600");
-const MAX_FILE_SIZE = process.env.MAX_FILE_SIZE || "5G";
-const MAX_CONCURRENT_DOWNLOADS = parseInt(process.env.MAX_CONCURRENT_DOWNLOADS || "5");
-const RETRY_ATTEMPTS = parseInt(process.env.RETRY_ATTEMPTS || "2");
-const RETRY_DELAY = parseInt(process.env.RETRY_DELAY || "3000");
+function safeEqual(a, b) {
+  const ha = crypto.createHash('sha256').update(String(a)).digest();
+  const hb = crypto.createHash('sha256').update(String(b)).digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
 
-// ================= MIDDLEWARE =================
+function isAuthorized(req) {
+  if (!config.API_KEY) return true;
+  const key = req.get('x-api-key') || req.query.api_key;
+  if (key && safeEqual(key, config.API_KEY)) return true;
+  // Requêtes locales (même machine, sans proxy) : confiance par défaut
+  return config.TRUST_LOCALHOST && util.isLoopback(req.socket.remoteAddress) && !req.get('x-forwarded-for');
+}
+
+function requireAuth(req, res, next) {
+  if (isAuthorized(req)) return next();
+  return res.status(401).json({ error: 'Clé API manquante ou invalide', authRequired: true });
+}
+
+app.use(cors((req, cb) => cb(null, { origin: isAllowedOrigin(req.headers.origin, req), maxAge: 600 })));
 app.use((req, res, next) => {
-  console.log(`[DEBUG_REQ] ${req.method} ${req.url}`);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   next();
 });
-app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.static("public"));
-app.use("/files", express.static("downloads"));
+app.use(express.json({ limit: '5mb' }));
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  log('ERROR', 'Erreur serveur', { error: err.message, stack: err.stack });
-  res.status(500).json({ error: 'Erreur interne du serveur' });
-});
-
-// ================= STORAGE =================
-const downloadsDir = path.join(__dirname, "downloads");
-const STATE_FILE = path.join(__dirname, "active_downloads.json");
-
-async function ensureDirectories() {
-  try {
-    await fs.access(downloadsDir);
-  } catch {
-    await fs.mkdir(downloadsDir, { recursive: true });
-  }
-}
-
-// ================= STATE & PERSISTENCE =================
-let activeDownloads = new Map(); // id -> { info, config, process, retryCount }
-let downloadQueue = []; // Array of ids waiting to start
-let clients = []; // SSE clients
-
-function processQueue() {
-  const runningCount = Array.from(activeDownloads.values()).filter(d =>
-    d.info.status === 'downloading' || d.info.status === 'retrying'
-  ).length;
-
-  if (runningCount < MAX_CONCURRENT_DOWNLOADS && downloadQueue.length > 0) {
-    const nextId = downloadQueue.shift();
-    log('INFO', `Dépilement file d'attente: démarrrage de ${nextId}`);
-    startDownload(nextId);
-    // Recursively check if we can start more
-    processQueue();
-  }
-}
-
-async function saveState() {
-  const data = Array.from(activeDownloads.values()).map(dl => dl.info);
-  try {
-    await fs.writeFile(STATE_FILE, JSON.stringify(data, null, 2));
-  } catch (e) {
-    log('ERROR', 'Erreur sauvegarde état:', e.message);
-  }
-}
-
-async function loadState() {
-  try {
-    await fs.access(STATE_FILE);
-    const content = await fs.readFile(STATE_FILE, 'utf8');
-    const data = JSON.parse(content);
-
-    data.forEach(info => {
-      if (info.status === 'downloading' || info.status === 'retrying') {
-        info.status = 'interrupted';
-        info.error = 'Arrêt du serveur';
-        info.speed = '0 KB/s';
-        info.eta = '--';
-      }
-      activeDownloads.set(info.id, { info, process: null, retryCount: 0 });
-    });
-
-    log('INFO', `État restauré : ${activeDownloads.size} téléchargements chargés`);
-  } catch (e) {
-    if (e.code !== 'ENOENT') {
-      log('ERROR', 'Erreur chargement état:', e.message);
-    }
-  }
-}
-
-// ================= SSE =================
-app.get("/events", (req, res) => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  res.flushHeaders();
-
-  const clientId = Date.now();
-  clients.push({ id: clientId, res });
-
-  // Envoyer l'état actuel au nouveau client
-  const currentList = Array.from(activeDownloads.values()).map(dl => dl.info);
-  currentList.forEach(info => {
-    res.write(`data: ${JSON.stringify({ type: "update", download: info })}\n\n`);
+if (config.DEBUG) {
+  app.use((req, res, next) => {
+    log('DEBUG', `${req.method} ${req.url}`);
+    next();
   });
-
-  req.on("close", () => {
-    clients = clients.filter(c => c.id !== clientId);
-  });
-});
-
-function broadcast(data) {
-  const message = `data: ${JSON.stringify(data)}\n\n`;
-  clients.forEach(c => {
-    try {
-      c.res.write(message);
-    } catch (err) {
-      log('WARN', 'Erreur broadcast SSE', { clientId: c.id });
-    }
-  });
-
-  // Sauvegarder l'état sur changements importants
-  if (data.type === 'status-change' ||
-    (data.download && !['downloading'].includes(data.download.status))) {
-    saveState();
-  }
 }
 
-// ================= DOMAIN PROFILES =================
-const DOMAIN_PROFILES = {
-  "example.com": {
-    referer: "https://example.com/",
-    ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    segments: 4
-  }
-};
+// ================= VALIDATION DES REQUÊTES =================
+const QUALITY_RE = /^(best|audio|\d{3,4})$/;
+const FORMAT_RE = /^[\w[\]<>=!*+/.,:?|&^$~()\- ]{1,200}$/;
+const KIND_HINTS = new Set(['platform', 'hls', 'dash', 'stream', 'vimeo-json', 'direct', 'page']);
+const FORBIDDEN_HEADERS = new Set([
+  'host', 'content-length', 'connection', 'transfer-encoding', 'range', 'te', 'upgrade', 'expect',
+  'keep-alive', 'proxy-authorization', 'proxy-connection', 'cookie', 'user-agent', 'referer', 'origin',
+]);
 
-function getDomainProfile(downloadUrl) {
+function str(value, max) {
+  if (value === undefined || value === null) return null;
+  const s = String(value).trim();
+  return s ? s.slice(0, max) : null;
+}
+
+function httpUrl(value) {
+  const s = str(value, 8192);
+  if (!s) return null;
   try {
-    const host = new URL(downloadUrl).hostname;
-    const domain = Object.keys(DOMAIN_PROFILES).find(d =>
-      host === d || host.endsWith("." + d)
-    );
-    return domain ? DOMAIN_PROFILES[domain] : null;
+    const u = new URL(s);
+    return /^https?:$/.test(u.protocol) ? u.href : null;
   } catch {
     return null;
   }
 }
 
-function defaultUA(ua) {
-  return ua || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+function buildJobConfig(body, source) {
+  const url = extractUrl(body.url);
+  if (!url) return { error: 'URL manquante ou invalide' };
+  const format = str(body.format, 200);
+  if (format && !FORMAT_RE.test(format)) return { error: 'Format yt-dlp invalide' };
+  const headers = {};
+  if (body.headers && typeof body.headers === 'object') {
+    for (const [k, v] of Object.entries(body.headers).slice(0, 20)) {
+      if (/^[A-Za-z0-9-]{1,64}$/.test(k) && !FORBIDDEN_HEADERS.has(k.toLowerCase())) {
+        headers[k] = util.cleanHeaderValue(v).slice(0, 4096);
+      }
+    }
+  }
+  const quality = QUALITY_RE.test(String(body.quality ?? '')) ? String(body.quality) : body.audioOnly ? 'audio' : 'best';
+  const pageUrl = httpUrl(body.pageUrl);
+  return {
+    config: {
+      url: normalizeUrl(url),
+      customFilename: str(body.customFilename, 200),
+      referer: httpUrl(body.referer) || pageUrl,
+      origin: str(body.origin, 300),
+      ua: str(body.ua, 600),
+      cookies: str(body.cookies, 32768),
+      cookieJar: normalizeCookieJar(body.cookieJar),
+      headers,
+      noCheckCert: !!body.noCheckCert,
+      singleSegment: !!body.singleSegment,
+      quality,
+      format,
+      playlist: !!body.playlist,
+      subtitles: !!body.subtitles,
+      pageUrl,
+      title: str(body.title, 300),
+      kind: KIND_HINTS.has(body.kind) ? body.kind : null,
+      source: str(body.source, 30) || source,
+    },
+  };
 }
 
-// ================= UTILITY FUNCTIONS =================
-function sanitizeFilename(filename) {
-  return filename.replace(/[^a-zA-Z0-9._-]/g, "_").substring(0, 255);
-}
+// ================= SSE (temps réel) =================
+const sseClients = new Set();
 
-function formatSize(bytes) {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-}
-
-function isAllowedProtocol(url) {
-  try {
-    const protocol = new URL(url).protocol;
-    return ["http:", "https:"].includes(protocol);
-  } catch {
-    return false;
+function broadcast(payload) {
+  const msg = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const res of sseClients) {
+    try {
+      res.write(msg);
+    } catch {
+      sseClients.delete(res);
+    }
   }
 }
 
-function isDomainAllowed(url) {
-  if (ALLOWED_DOMAINS.length === 0) return true;
+jobs.on('update', (info) => broadcast({ type: 'update', download: info }));
+jobs.on('removed', (id) => broadcast({ type: 'removed', id }));
+jobs.on('library-changed', () => broadcast({ type: 'library-changed' }));
 
-  try {
-    const hostname = new URL(url).hostname;
-    return ALLOWED_DOMAINS.some(domain =>
-      hostname === domain || hostname.endsWith("." + domain)
-    );
-  } catch {
-    return false;
+setInterval(() => {
+  for (const res of sseClients) {
+    try {
+      res.write(': ping\n\n');
+    } catch {
+      sseClients.delete(res);
+    }
   }
+}, 25000).unref();
+
+app.get('/events', requireAuth, (req, res) => {
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.flushHeaders();
+  res.write('retry: 3000\n\n');
+  res.write(`data: ${JSON.stringify({ type: 'snapshot', downloads: jobs.list(), version: config.VERSION })}\n\n`);
+  sseClients.add(res);
+  req.on('close', () => sseClients.delete(res));
+});
+
+// ================= INFOS =================
+function binariesInfo() {
+  return {
+    aria2c: binaries.aria2c,
+    ffmpeg: binaries.ffmpeg,
+    ytdlp: binaries.ytdlp,
+    ytdlpAgeDays: ytdlpAgeDays(),
+  };
 }
 
-function isVideoPlatform(url) {
-  const platforms = [
-    'youtube.com/watch',
-    'youtu.be/',
-    'twitch.tv/',
-    'vimeo.com/',
-    'dailymotion.com/video',
-    'facebook.com/watch',
-    'instagram.com/p/',
-    'tiktok.com/',
-    'googlevideo.com' // direct Google video delivery links (videoplayback) - treat as video
-  ];
-  return platforms.some(platform => url.includes(platform));
-}
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', version: config.VERSION, jobs: jobs.counts(), maxConcurrent: config.MAX_CONCURRENT_DOWNLOADS, binaries: binariesInfo() });
+});
 
-// ================= ROUTES =================
-app.get("/health", (req, res) => {
+app.get('/config', (req, res) => {
   res.json({
-    status: 'ok',
-    activeDownloads: activeDownloads.size,
-    maxConcurrent: MAX_CONCURRENT_DOWNLOADS
+    version: config.VERSION,
+    allowedDomains: config.ALLOWED_DOMAINS,
+    maxFileSize: config.MAX_FILE_SIZE,
+    downloadTimeout: config.DOWNLOAD_TIMEOUT,
+    maxConcurrent: config.MAX_CONCURRENT_DOWNLOADS,
+    retryAttempts: config.RETRY_ATTEMPTS,
+    queueSize: jobs.queue.length,
+    authRequired: !!config.API_KEY,
+    authorized: isAuthorized(req),
+    deleteAfterTransfer: config.DELETE_AFTER_TRANSFER,
+    binaries: binariesInfo(),
   });
 });
 
-app.get("/history", async (req, res) => {
+// ================= TÉLÉCHARGEMENTS =================
+async function handleDownload(req, res) {
+  const body = req.body || {};
+  const source = req.path.includes('capture') ? 'extension' : 'web';
+  const raw = Array.isArray(body.urls) ? body.urls : [body.url];
+  const list = raw
+    .flatMap((u) => String(u ?? '').split(/\s+/))
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 200);
+  if (!list.length) return res.status(400).json({ error: 'URL manquante' });
+
+  const created = [];
+  const errors = [];
+  for (const item of list) {
+    const { config: cfg, error } = buildJobConfig({ ...body, url: item, customFilename: list.length === 1 ? body.customFilename : null }, source);
+    if (error) {
+      errors.push({ url: item, error, status: 400 });
+      continue;
+    }
+    const check = await checkUrl(cfg.url);
+    if (!check.ok) {
+      log('WARN', `URL refusée: ${check.error}`, util.truncate(cfg.url, 120));
+      errors.push({ url: item, error: check.error, status: check.status });
+      continue;
+    }
+    const job = jobs.add(cfg);
+    created.push({ id: job.id, url: cfg.url, status: job.info.status, queuePosition: jobs.queue.indexOf(job.id) + 1 });
+  }
+
+  if (!created.length) {
+    const first = errors[0] || {};
+    return res.status(first.status || 400).json({ error: first.error || 'Aucune URL valide', errors });
+  }
+  const first = created[0];
+  return res.json({
+    id: first.id,
+    status: first.status,
+    queuePosition: first.queuePosition,
+    message: created.length > 1 ? `${created.length} téléchargements ajoutés` : 'Téléchargement ajouté à la file d\'attente',
+    jobs: created,
+    errors,
+  });
+}
+
+app.post('/download', requireAuth, handleDownload);
+app.post('/api/download', requireAuth, handleDownload);
+app.post('/api/capture', requireAuth, handleDownload); // compatibilité extension v3
+
+let analysesRunning = 0;
+app.post('/api/analyze', requireAuth, async (req, res) => {
+  const { config: cfg, error } = buildJobConfig(req.body || {}, 'analyze');
+  if (error) return res.status(400).json({ error });
+  if (analysesRunning >= 4) return res.status(429).json({ error: 'Trop d\'analyses en cours, réessayez dans un instant' });
+  analysesRunning++;
   try {
-    const files = await fs.readdir(downloadsDir);
-    const history = await Promise.all(
-      files
-        .filter(f => f !== ".gitkeep" && !f.endsWith(".aria2"))
-        .map(async file => {
-          try {
-            const filePath = path.join(downloadsDir, file);
-            const stats = await fs.stat(filePath);
-            return {
-              id: file,
-              filename: file,
-              size: stats.size,
-              date: stats.mtime,
-              status: "completed",
-              progress: 100
-            };
-          } catch {
-            return null;
-          }
-        })
-    );
-
-    const validHistory = history
-      .filter(Boolean)
-      .sort((a, b) => b.date - a.date);
-
-    res.json(validHistory);
-  } catch (err) {
-    log('ERROR', 'Erreur lecture historique', { error: err.message });
-    res.status(500).json({ error: "Impossible de lire l'historique" });
+    res.json(await analyze(cfg));
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  } finally {
+    analysesRunning--;
   }
 });
 
-app.get("/transfer/:filename", (req, res) => {
-  const filename = sanitizeFilename(req.params.filename);
-  const filePath = path.join(downloadsDir, filename);
-
-  if (!fsSync.existsSync(filePath)) {
-    return res.status(404).json({ error: "Fichier introuvable" });
+app.get('/api/jobs', requireAuth, (req, res) => {
+  let list = jobs.list();
+  if (req.query.ids) {
+    const ids = new Set(String(req.query.ids).split(','));
+    list = list.filter((j) => ids.has(j.id));
   }
+  res.json(list.slice(0, 300));
+});
 
-  res.download(filePath, filename, async (err) => {
-    if (!err) {
+app.post('/cancel', requireAuth, (req, res) => {
+  const id = str(req.body?.id, 100);
+  if (!id) return res.status(400).json({ error: 'ID manquant' });
+  const job = jobs.cancel(id);
+  if (!job) return res.status(404).json({ error: 'Téléchargement introuvable' });
+  res.json({ success: true, status: job.info.status, message: 'Annulation demandée' });
+});
+
+app.post('/cancel-all', requireAuth, (req, res) => {
+  const cancelled = jobs.cancelAll();
+  log('WARN', `Annulation de tous les téléchargements (${cancelled})`);
+  res.json({ cancelled, message: `${cancelled} téléchargement(s) annulé(s)` });
+});
+
+app.post('/retry', requireAuth, (req, res) => {
+  const job = jobs.retry(str(req.body?.id, 100) || '');
+  if (!job) return res.status(404).json({ error: 'Rien à relancer (introuvable ou encore actif)' });
+  res.json({ success: true, id: job.id });
+});
+
+app.delete('/api/jobs/:id', requireAuth, (req, res) => {
+  if (!jobs.remove(req.params.id)) return res.status(409).json({ error: 'Introuvable ou encore en cours' });
+  res.json({ success: true });
+});
+
+app.post('/api/jobs/clear', requireAuth, (req, res) => {
+  res.json({ removed: jobs.clearFinished() });
+});
+
+// ================= BIBLIOTHÈQUE =================
+const TEMP_FILE_RE = /\.(aria2|part|ytdl|tmp|temp)$|\.part-Frag\d+/i;
+
+async function listLibrary() {
+  const out = [];
+  async function walk(dir, rel, depth) {
+    let entries;
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.name.startsWith('.') || TEMP_FILE_RE.test(e.name)) continue;
+      const abs = path.join(dir, e.name);
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        if (depth < 2) await walk(abs, r, depth + 1);
+        continue;
+      }
+      if (!e.isFile()) continue;
       try {
-        await fs.unlink(filePath);
-        log('INFO', `Fichier transféré et supprimé: ${filename}`);
-      } catch (unlinkErr) {
-        log('WARN', `Impossible de supprimer: ${filename}`, { error: unlinkErr.message });
-      }
+        const st = await fsp.stat(abs);
+        out.push({
+          id: r, filename: r, name: e.name, size: st.size, date: st.mtime,
+          type: util.mediaCategory(e.name), status: 'completed', progress: 100,
+        });
+      } catch { /* supprimé entre-temps */ }
     }
-  });
-});
-
-app.post("/cancel", async (req, res) => {
-  const { id } = req.body;
-
-  if (!id) {
-    return res.status(400).json({ error: "ID manquant" });
   }
-
-  log('INFO', `Demande d'annulation pour: ${id}`);
-  const download = activeDownloads.get(id);
-
-  if (!download) {
-    log('WARN', `Téléchargement introuvable: ${id}`);
-    return res.status(404).json({ error: "Téléchargement introuvable" });
-  }
-
-  try {
-    if (download.process) {
-      download.process.kill("SIGTERM");
-    }
-    download.info.status = "cancelled";
-    broadcast({ type: "status-change", download: download.info });
-    activeDownloads.delete(id);
-
-    log('SUCCESS', `Téléchargement annulé: ${download.info.filename}`);
-    res.json({ success: true, message: "Téléchargement annulé" });
-  } catch (err) {
-    log('ERROR', `Erreur annulation ${id}`, { error: err.message });
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post("/cancel-all", async (req, res) => {
-  log('WARN', `Annulation de tous les téléchargements (${activeDownloads.size} actifs)`);
-  let cancelled = 0;
-
-  activeDownloads.forEach((download, id) => {
-    try {
-      if (download.process) {
-        download.process.kill("SIGTERM");
-      }
-      download.info.status = "cancelled";
-      broadcast({ type: "status-change", download: download.info });
-      cancelled++;
-    } catch (err) {
-      log('ERROR', `Erreur annulation ${id}`, { error: err.message });
-    }
-  });
-
-  activeDownloads.clear();
-  await saveState();
-
-  log('SUCCESS', `${cancelled} téléchargements annulés`);
-  res.json({ cancelled, message: `${cancelled} téléchargements annulés` });
-});
-
-app.delete("/clear-history", async (req, res) => {
-  try {
-    const files = await fs.readdir(downloadsDir);
-    let deleted = 0;
-
-    await Promise.all(
-      files
-        .filter(file => file !== ".gitkeep")
-        .map(async file => {
-          try {
-            await fs.unlink(path.join(downloadsDir, file));
-            deleted++;
-          } catch (e) {
-            log('ERROR', `Erreur suppression ${file}`, { error: e.message });
-          }
-        })
-    );
-
-    log('INFO', `Historique nettoyé: ${deleted} fichiers supprimés`);
-    res.json({ deleted, message: `${deleted} fichiers supprimés` });
-  } catch (err) {
-    log('ERROR', 'Erreur nettoyage historique', { error: err.message });
-    res.status(500).json({ error: "Impossible de nettoyer l'historique" });
-  }
-});
-
-app.get("/config", (req, res) => {
-  res.json({
-    allowedDomains: ALLOWED_DOMAINS,
-    maxFileSize: MAX_FILE_SIZE,
-    downloadTimeout: DOWNLOAD_TIMEOUT,
-    maxConcurrent: MAX_CONCURRENT_DOWNLOADS,
-    retryAttempts: RETRY_ATTEMPTS,
-    queueSize: downloadQueue.length
-  });
-});
-
-// === AJOUT : ROUTE CAPTURE EXTENSION ===
-// À placer AVANT la section "// ================= DOWNLOAD LOGIC ================="
-
-app.post("/api/capture", async (req, res) => {
-  const { url, type, tabId } = req.body || {};
-
-  if (!url) {
-    return res.status(400).json({ error: "URL manquante" });
-  }
-
-  // Validation protocole & domaine
-  if (!isAllowedProtocol(url) || !isDomainAllowed(url)) {
-    return res.status(403).json({ error: "URL non autorisée" });
-  }
-
-  log('INFO', 'Flux capturé depuis extension', { type, url: url.substring(0, 120), tabId });
-
-  // Heuristique :
-  // - mp4 direct → aria2
-  // - m3u8 / mpd → ffmpeg
-  // - plateformes vidéo → yt-dlp
-
-  const isStream = /\.(m3u8|mpd)(\?|$)/i.test(url);
-  const isVideo = isVideoPlatform(url);
-
-  // Délégation vers la route /download existante
-  try {
-    const resp = await fetch(`http://localhost:${PORT}/download`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url,
-        ua: defaultUA(),
-        singleSegment: isStream,
-      })
-    });
-
-    const data = await resp.json();
-    res.json({ ok: true, delegated: true, data });
-  } catch (e) {
-    log('ERROR', 'Échec délégation capture → download', { error: e.message });
-    res.status(500).json({ error: 'Échec traitement capture' });
-  }
-});
-
-// ================= DOWNLOAD LOGIC =================
-function startDownload(id) {
-  const download = activeDownloads.get(id);
-  if (!download) return;
-
-  const { url, filename, ua, referer, cookies, noCheckCert, singleSegment, forceVideo } = download.config;
-  let { retryCount } = download;
-  const isVideo = !!forceVideo || isVideoPlatform(url);
-
-  download.info.status = 'downloading';
-  download.info.startedAt = new Date().toISOString();
-  broadcast({ type: "status-change", download: download.info });
-
-  log('INFO', `Démarrage téléchargement: ${filename} (Retry: ${retryCount})`, {
-    url: url.substring(0, 100),
-    type: isVideo ? 'video' : url.match(/\.(m3u8|mpd)/i) ? 'stream' : 'direct'
-  });
-
-  let proc;
-  let lastError = "";
-  const isRetry = retryCount > 0;
-
-  if (isVideo) {
-    // YT-DLP pour plateformes vidéo
-    log('INFO', `Utilisation de yt-dlp${isRetry ? ' (retry ' + retryCount + ')' : ''}`);
-
-    const ytArgs = [
-      "--newline",
-      "--no-playlist",
-      "--format", "bestvideo+bestaudio/best",
-      "--merge-output-format", "mp4",
-      "--extractor-args", "youtube:player_client=default,android,ios,tv",
-      "--output", path.join(downloadsDir, `${filename}.mp4`),
-      url
-    ];
-
-    if (cookies) ytArgs.push("--add-header", `Cookie: ${cookies}`);
-    if (noCheckCert) ytArgs.push("--no-check-certificate");
-
-    proc = spawn("yt-dlp", ytArgs);
-
-    proc.stdout.on("data", d => {
-      const line = d.toString();
-
-      const progress = line.match(/(\d+\.?\d*)%/);
-      const size = line.match(/of\s+(~?[0-9.]+[KMGTiB]+)/);
-      const speed = line.match(/at\s+([0-9.]+[KMGTiB]+\/s)/);
-      const eta = line.match(/ETA\s+([0-9:]+)/);
-
-      if (progress) {
-        download.info.progress = Math.min(100, Math.floor(parseFloat(progress[1])));
-        if (size) download.info.fullSize = size[1];
-        if (speed) download.info.speed = speed[1];
-        if (eta) download.info.eta = eta[1];
-
-        broadcast({ type: "update", download: download.info });
-      }
-    });
-
-    proc.stderr.on("data", d => {
-      lastError += d.toString();
-    });
-
-  } else if (url.match(/\.(m3u8|mpd)/i)) {
-    // FFMPEG pour streams
-    log('INFO', `Utilisation de ffmpeg${isRetry ? ' (retry ' + retryCount + ')' : ''}`);
-
-    const ffmpegArgs = [
-      "-headers", `User-Agent: ${defaultUA(ua)}\r\n`,
-      "-i", url,
-      "-c", "copy",
-      "-bsf:a", "aac_adtstoasc",
-      path.join(downloadsDir, `${filename}.mp4`)
-    ];
-
-    proc = spawn("ffmpeg", ffmpegArgs);
-
-    proc.stderr.on("data", d => {
-      const line = d.toString();
-      const timeMatch = line.match(/time=(\d+):(\d+):(\d+)/);
-
-      if (timeMatch) {
-        const hours = parseInt(timeMatch[1]);
-        const minutes = parseInt(timeMatch[2]);
-        const seconds = parseInt(timeMatch[3]);
-        const totalSeconds = hours * 3600 + minutes * 60 + seconds;
-
-        download.info.eta = `${totalSeconds}s encodées`;
-        download.info.progress = Math.min(99, Math.floor(totalSeconds / 10));
-        broadcast({ type: "update", download: download.info });
-      }
-
-      lastError += line;
-    });
-
-  } else {
-    // ARIA2C pour téléchargements directs
-    log('INFO', `Utilisation d'aria2c${isRetry ? ' (retry ' + retryCount + ')' : ''}`);
-
-    const args = [
-      "--console-log-level=notice",
-      "--summary-interval=1",
-      "--dir", downloadsDir,
-      "--out", filename,
-      "--user-agent", defaultUA(ua),
-      "--max-tries", "5",
-      "--retry-wait", "3"
-    ];
-
-    if (referer) args.push("--referer", referer);
-
-    if (isVideo || isRetry || singleSegment) {
-      args.push("--max-connection-per-server=1", "--split=1");
-    } else {
-      args.push("--max-connection-per-server=16", "--split=16");
-    }
-
-    if (cookies) args.push("--header", `Cookie: ${cookies}`);
-    if (noCheckCert) args.push("--check-certificate=false");
-    // if (MAX_FILE_SIZE) args.push("--max-download-limit", MAX_FILE_SIZE); // Option erronée: limite la vitesse, pas la taille
-
-    args.push(url);
-    proc = spawn("aria2c", args);
-
-    proc.stdout.on("data", d => {
-      const line = d.toString();
-
-      // Parser aria2c output
-      const progressMatch = line.match(/\[#\d+\s+([^\s]+)\/([^\s]+)\((\d+)%\)\s+CN:(\d+)\s+DL:([^\s]+)\s+ETA:([^\]]+)\]/);
-
-      if (progressMatch) {
-        download.info.currentSize = progressMatch[1];
-        download.info.fullSize = progressMatch[2];
-        download.info.progress = parseInt(progressMatch[3]);
-        download.info.speed = progressMatch[5] + "/s";
-        download.info.eta = progressMatch[6];
-        broadcast({ type: "update", download: download.info });
-      } else {
-        const simpleProgress = line.match(/\((\d+)%\)/);
-        if (simpleProgress) {
-          download.info.progress = parseInt(simpleProgress[1]);
-          broadcast({ type: "update", download: download.info });
-        }
-      }
-    });
-
-    proc.stderr.on("data", d => {
-      lastError += d.toString();
-    });
-  }
-
-  // Update process ref
-  download.process = proc;
-
-  // Timeout de sécurité
-  const timeout = setTimeout(() => {
-    if (proc) {
-      log('WARN', `Timeout atteint pour: ${filename}`);
-      proc.kill("SIGTERM");
-    }
-  }, DOWNLOAD_TIMEOUT * 1000);
-
-  proc.on("close", code => {
-    clearTimeout(timeout);
-
-    if (code === 0) {
-      download.info.status = "completed";
-      download.info.progress = 100;
-      download.info.completedAt = new Date().toISOString();
-      log('SUCCESS', `Téléchargement terminé: ${filename}`, {
-        size: download.info.fullSize
-      });
-
-      activeDownloads.delete(id);
-      broadcast({ type: "status-change", download: download.info });
-      processQueue(); // Trigger next
-    } else {
-      // Vérifier si retry nécessaire
-      const shouldRetry = download.retryCount < RETRY_ATTEMPTS && (
-        lastError.includes("503") ||
-        lastError.includes("Connection") ||
-        lastError.includes("timeout") ||
-        lastError.includes("SSL") ||
-        code === 3 || code === 7
-      );
-
-      if (shouldRetry) {
-        download.retryCount++;
-        log('WARN', `Retry automatique ${download.retryCount}/${RETRY_ATTEMPTS} dans ${RETRY_DELAY / 1000}s: ${filename}`);
-        download.info.status = "retrying";
-        broadcast({ type: "update", download: download.info });
-
-        setTimeout(() => startDownload(id), RETRY_DELAY);
-        return;
-      }
-
-      download.info.status = "error";
-      const errorLines = lastError.split("\n").filter(l =>
-        l.toLowerCase().includes("error") || l.toLowerCase().includes("failed")
-      );
-      download.info.error = errorLines.length > 0
-        ? errorLines[0].substring(0, 200)
-        : `Échec (code ${code})`;
-
-      log('ERROR', `Téléchargement échoué: ${filename}`, {
-        error: download.info.error,
-        code,
-        retries: retryCount
-      });
-    }
-
-    broadcast({ type: "status-change", download: download.info });
-    activeDownloads.delete(id);
-  });
-
-  proc.on("error", err => {
-    log('ERROR', `Erreur processus: ${filename}`, { error: err.message });
-    download.info.status = "error";
-    download.info.error = err.message;
-    broadcast({ type: "status-change", download: download.info });
-    activeDownloads.delete(id);
-    processQueue();
-  });
+  await walk(config.DOWNLOADS_DIR, '', 0);
+  return out.sort((a, b) => b.date - a.date);
 }
 
-// ================= DOWNLOAD HANDLER =================
-app.post("/download", async (req, res) => {
-  const { url, referer, ua, noCheckCert, customFilename, singleSegment, cookies } = req.body;
+function resolveLibraryPath(parts) {
+  const segs = (Array.isArray(parts) ? parts : String(parts || '').split('/')).filter((s) => s !== '');
+  if (!segs.length || segs.some((s) => s.startsWith('.') || s.includes('\0'))) return null;
+  const abs = path.resolve(config.DOWNLOADS_DIR, ...segs);
+  if (abs === config.DOWNLOADS_DIR || !util.isPathInside(config.DOWNLOADS_DIR, abs)) return null;
+  return abs;
+}
 
-  // Validation basique
-  if (!url) {
-    return res.status(400).json({ error: "URL manquante" });
-  }
-
-  // Validation protocole
-  if (!isAllowedProtocol(url)) {
-    log('ERROR', 'Protocole non autorisé', { url });
-    return res.status(400).json({ error: "Protocole non autorisé (http/https uniquement)" });
-  }
-
-  // Validation domaine
-  if (!isDomainAllowed(url)) {
-    const hostname = new URL(url).hostname;
-    log('WARN', `Domaine non autorisé: ${hostname}`);
-    return res.status(403).json({ error: `Domaine non autorisé: ${hostname}` });
-  }
-
-  // ----- Robustesse: réparer/valider le champ `url` (parfois l'extension poste des headers dans url) -----
-  let forceVideo = false;
-
-  if (typeof url === 'string' && (url.includes('\n') || url.includes('\r') || /referer[:=]/i.test(url))) {
-    const match = url.match(/https?:\/\/[^\s'"]+/i);
-    if (match) {
-      log('WARN', 'URL malformée reçue, extraction de la vraie URL', { original: url.substring(0,200), extracted: match[0] });
-      req.body.url = match[0];
-      // Mettre à jour la variable locale `url`
-      url = match[0];
-    } else {
-      log('ERROR', 'URL invalide reçue (champ `url` contient probablement des headers)', { sample: url.substring(0,200) });
-      return res.status(400).json({ error: "URL invalide : vérifiez l'extension (le champ url contient des headers ou est malformé)" });
-    }
-  }
-
-  // ----- Détection HEAD pour reconnaître les manifests DASH / JSON (ex: Vimeo) -----
+async function isFile(abs) {
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000);
-
-    const headRes = await fetch(url, {
-      method: 'HEAD',
-      headers: { 'User-Agent': defaultUA(ua) },
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-
-    const ct = (headRes.headers.get('content-type') || '').toLowerCase();
-
-    if (ct.includes('application/vnd.vimeo.dash+json') || ct.includes('application/dash+xml') || ct.includes('application/manifest+json')) {
-      forceVideo = true;
-      log('INFO', 'HEAD content-type indique DASH/manifest (forçage vidéo)', { url: url.substring(0,120), contentType: ct });
-    }
-  } catch (e) {
-    log('WARN', 'HEAD request échouée (skip content-type detection)', { error: e.message, url: url.substring(0,120) });
+    return (await fsp.stat(abs)).isFile();
+  } catch {
+    return false;
   }
+}
 
-  // Vérification espace disque (uniquement pour fichiers directs)
-  if (!isVideoPlatform(url) && !url.match(/\.(m3u8|mpd)/i)) {
+// Suppression via lien seulement si la requête ne vient pas d'un autre site (anti-CSRF)
+function crossSiteSafe(req) {
+  const site = req.get('sec-fetch-site');
+  return !site || site === 'same-origin' || site === 'none';
+}
+
+app.get('/history', requireAuth, async (req, res) => {
+  try {
+    res.json(await listLibrary());
+  } catch (e) {
+    log('ERROR', 'Erreur lecture bibliothèque', e.message);
+    res.status(500).json({ error: 'Impossible de lire la bibliothèque' });
+  }
+});
+app.get('/api/library', requireAuth, async (req, res) => res.json(await listLibrary()));
+
+// Téléchargement vers le PC (sans suppression)
+app.get('/dl/*path', requireAuth, async (req, res) => {
+  const abs = resolveLibraryPath(req.params.path);
+  if (!abs || !(await isFile(abs))) return res.status(404).json({ error: 'Fichier introuvable' });
+  res.download(abs, path.basename(abs));
+});
+
+// Récupérer puis supprimer du serveur
+app.get('/transfer/*path', requireAuth, async (req, res) => {
+  const abs = resolveLibraryPath(req.params.path);
+  if (!abs || !(await isFile(abs))) return res.status(404).json({ error: 'Fichier introuvable' });
+  res.download(abs, path.basename(abs), async (err) => {
+    if (err) return;
+    if (!config.DELETE_AFTER_TRANSFER || !crossSiteSafe(req)) return;
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-      const headRes = await fetch(url, {
-        method: 'HEAD',
-        headers: { 'User-Agent': defaultUA(ua) },
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-
-      const contentLength = headRes.headers.get('content-length');
-
-      if (contentLength) {
-        const bytesNeeded = parseInt(contentLength);
-        const stats = await fs.statfs(downloadsDir);
-        const bytesAvailable = stats.bavail * stats.bsize;
-
-        if (bytesAvailable < bytesNeeded) {
-          log('WARN', `Espace disque insuffisant: ${formatSize(bytesNeeded)} requis, ${formatSize(bytesAvailable)} dispo`);
-          return res.status(507).json({
-            error: `Espace disque insuffisant. Requis: ${formatSize(bytesNeeded)}, Disponible: ${formatSize(bytesAvailable)}`
-          });
-        }
-      }
+      await fsp.unlink(abs);
+      log('INFO', `Fichier transféré puis supprimé: ${path.basename(abs)}`);
+      broadcast({ type: 'library-changed' });
     } catch (e) {
-      log('WARN', 'Impossible de vérifier la taille du fichier (skip)', { error: e.message });
+      log('WARN', `Suppression impossible après transfert: ${path.basename(abs)}`, e.message);
     }
-  }
-
-  const id = uuidv4();
-  const timestamp = Date.now();
-  const isYouTube = url.includes("googlevideo.com") || url.includes("youtube.com");
-
-  // Générer nom de fichier sécurisé
-  const baseName = customFilename?.trim()
-    ? sanitizeFilename(customFilename)
-    : sanitizeFilename(path.basename(url).split("?")[0]) || "download";
-
-  const filename = customFilename?.trim() ? baseName : `${timestamp}_${baseName}`;
-
-  const downloadInfo = {
-    id,
-    url,
-    filename,
-    status: "queued",
-    progress: 0,
-    speed: "0 KB/s",
-    eta: "--",
-    currentSize: "0 B",
-    fullSize: "???",
-    startedAt: null
-  };
-
-  const downloadConfig = {
-    url, referer, ua, noCheckCert, customFilename, singleSegment, cookies, filename, forceVideo
-  };
-
-  log('INFO', `Nouveau téléchargement en file d'attente: ${filename}`, {
-    url: url.substring(0, 100),
-    type: isVideoPlatform(url) ? 'video' : url.match(/\.(m3u8|mpd)/i) ? 'stream' : 'direct'
-  });
-
-  // Stocker le processus
-  activeDownloads.set(id, { info: downloadInfo, config: downloadConfig, process: null, retryCount: 0 });
-  downloadQueue.push(id);
-
-  broadcast({ type: "update", download: downloadInfo });
-  processQueue(); // Tenter de démarrer si slot libre
-
-  res.json({
-    id,
-    filename,
-    message: "Téléchargement ajouté à la file d'attente",
-    status: "queued",
-    queuePosition: downloadQueue.length
   });
 });
 
-// ================= STARTUP =================
-let server;
+app.delete('/files/*path', requireAuth, async (req, res) => {
+  const abs = resolveLibraryPath(req.params.path);
+  if (!abs || !(await isFile(abs))) return res.status(404).json({ error: 'Fichier introuvable' });
+  await fsp.unlink(abs);
+  log('INFO', `Fichier supprimé: ${path.relative(config.DOWNLOADS_DIR, abs)}`);
+  broadcast({ type: 'library-changed' });
+  res.json({ success: true });
+});
 
-async function startServer() {
+app.delete('/clear-history', requireAuth, async (req, res) => {
   try {
-    await ensureDirectories();
-    await loadState();
-
-    server = app.listen(PORT, () => {
-      log('SUCCESS', `Serveur démarré sur le port ${PORT}`);
-      log('INFO', `Configuration: ${MAX_CONCURRENT_DOWNLOADS} téléchargements max, ${ALLOWED_DOMAINS.length > 0 ? ALLOWED_DOMAINS.length + ' domaines autorisés' : 'tous domaines autorisés'}`);
-    });
-
-    server.on('error', (err) => {
-      log('ERROR', 'Erreur critique du serveur HTTP', { error: err.message });
-      process.exit(1);
-    });
-
-  } catch (err) {
-    log('ERROR', 'Erreur démarrage serveur', { error: err.message });
-    process.exit(1);
+    const files = await listLibrary();
+    let deleted = 0;
+    for (const f of files) {
+      const abs = resolveLibraryPath(f.filename);
+      if (!abs) continue;
+      try {
+        await fsp.unlink(abs);
+        deleted++;
+      } catch (e) {
+        log('WARN', `Suppression impossible: ${f.filename}`, e.message);
+      }
+    }
+    // Supprime les sous-dossiers devenus vides
+    for (const e of await fsp.readdir(config.DOWNLOADS_DIR, { withFileTypes: true })) {
+      if (e.isDirectory() && !e.name.startsWith('.')) await fsp.rmdir(path.join(config.DOWNLOADS_DIR, e.name)).catch(() => {});
+    }
+    log('INFO', `Bibliothèque vidée: ${deleted} fichier(s) supprimé(s)`);
+    broadcast({ type: 'library-changed' });
+    res.json({ deleted, message: `${deleted} fichier(s) supprimé(s)` });
+  } catch (e) {
+    log('ERROR', 'Erreur nettoyage bibliothèque', e.message);
+    res.status(500).json({ error: 'Impossible de vider la bibliothèque' });
   }
+});
+
+// Lecture/streaming des fichiers (Range supporté → lecture vidéo dans le navigateur)
+const RISKY_EXT = /\.(html?|xhtml|svg|xml|js|mjs)$/i;
+app.use('/files', requireAuth, express.static(config.DOWNLOADS_DIR, {
+  dotfiles: 'ignore',
+  index: false,
+  setHeaders: (res, filePath) => {
+    if (RISKY_EXT.test(filePath)) {
+      res.setHeader('Content-Security-Policy', 'sandbox');
+      res.setHeader('Content-Disposition', 'attachment');
+    }
+  },
+}));
+
+// Interface web
+app.use(express.static(path.join(config.ROOT, 'public'), { index: 'index.html' }));
+
+// ================= ERREURS =================
+app.use((req, res) => res.status(404).json({ error: 'Introuvable' }));
+
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'JSON invalide' });
+  if (err.type === 'entity.too.large') return res.status(413).json({ error: 'Requête trop volumineuse' });
+  log('ERROR', 'Erreur serveur', err.stack || err.message);
+  if (res.headersSent) return res.end();
+  return res.status(500).json({ error: 'Erreur interne du serveur' });
+});
+
+// ================= DÉMARRAGE =================
+async function start() {
+  await util.ensureDir(config.DOWNLOADS_DIR);
+  await util.ensureDir(config.TMP_DIR);
+  detectBinaries();
+  await jobs.load();
+
+  // Nettoie les dossiers temporaires orphelins (garde ceux des jobs à reprendre)
+  for (const name of await fsp.readdir(config.TMP_DIR).catch(() => [])) {
+    if (!jobs.jobs.has(name)) await util.removePath(path.join(config.TMP_DIR, name));
+  }
+
+  await new Promise((resolve, reject) => {
+    server = app.listen(config.PORT, config.HOST, resolve);
+    server.once('error', reject);
+  });
+  const { port } = server.address();
+  for (const host of ['localhost', '127.0.0.1', '[::1]']) serverOrigins.add(`http://${host}:${port}`);
+  log('SUCCESS', `Web Wget Pro v${config.VERSION} démarré sur http://localhost:${port}`);
+  log('INFO', `Config : ${config.MAX_CONCURRENT_DOWNLOADS} téléchargements simultanés, ${config.ALLOWED_DOMAINS.length ? `${config.ALLOWED_DOMAINS.length} domaine(s) autorisé(s)` : 'tous domaines autorisés'}${config.API_KEY ? ', clé API active' : ''}`);
+  const age = ytdlpAgeDays();
+  if (age !== null && age > 60) {
+    log('WARN', `yt-dlp date de ${age} jours : mettez-le à jour (pip install -U "yt-dlp[default]") sinon certains sites échoueront`);
+  }
+  jobs.schedule();
+  return server;
 }
 
-// Gestion arrêt gracieux
-async function gracefulShutdown(signal) {
-  log('INFO', `Signal ${signal} reçu, arrêt gracieux...`);
-
-  if (server) {
-    server.close(() => {
-      log('INFO', 'Serveur HTTP fermé');
-    });
+let stopping = false;
+async function shutdown(signal) {
+  if (stopping) return;
+  stopping = true;
+  log('INFO', `Signal ${signal} reçu, arrêt propre…`);
+  for (const res of sseClients) {
+    try {
+      res.end();
+    } catch { /* ignore */ }
   }
-
-  await saveState();
+  server?.close();
+  await jobs.shutdown();
   process.exit(0);
 }
 
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('unhandledRejection', (e) => log('ERROR', 'Promesse rejetée non gérée', e?.stack || String(e)));
 
-startServer();
+if (require.main === module) {
+  // SIGUSR2 = redémarrage nodemon : on arrête proprement les outils pour reprendre ensuite
+  for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGUSR2']) process.on(sig, () => shutdown(sig));
+  start().catch((e) => {
+    log('ERROR', 'Démarrage impossible', e.code === 'EADDRINUSE' ? `Le port ${config.PORT} est déjà utilisé` : e.message);
+    process.exit(1);
+  });
+}
+
+module.exports = { app, jobs, start, shutdown, buildJobConfig, listLibrary };

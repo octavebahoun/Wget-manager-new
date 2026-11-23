@@ -7,25 +7,19 @@
   <meta name="description" content="Web Wget Pro - Interface de gestion des téléchargements">
   <meta name="theme-color" content="#8b5cf6">
   <title>Web Wget Pro | Gestionnaire de téléchargements</title>
-  
-  <!-- Preconnect -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Crect width=%22100%22 height=%22100%22 rx=%2224%22 fill=%22%238b5cf6%22/%3E%3Cpath d=%22M50 22v40m0 0l-16-16m16 16l16-16M28 76h44%22 stroke=%22white%22 stroke-width=%229%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E">
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="preconnect" href="https://cdnjs.cloudflare.com">
-  
-  <!-- Fonts -->
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  
-  <!-- Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer">
-  
-  <!-- Styles -->
   <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
   <div class="container">
-    
+
     <!-- HEADER -->
     <header class="main-header">
       <div class="header-content">
@@ -35,150 +29,144 @@
           </div>
           <div class="header-info">
             <h1 class="header-title">Web Wget Pro</h1>
-            <p class="header-subtitle">Interface de gestion propulsée par Aria2, yt-dlp & FFmpeg</p>
+            <p class="header-subtitle">aria2 · yt-dlp · ffmpeg — vidéos, flux HLS/DASH, Vimeo privé, fichiers</p>
           </div>
         </div>
         <div class="header-right">
-          <div class="connection-status" id="connectionStatus">
+          <div class="connection-status offline" id="connectionStatus">
             <div class="status-indicator"></div>
-            <span class="status-text">Connecté</span>
+            <span class="status-text">Connexion…</span>
           </div>
-          <button class="icon-btn" id="settingsBtn" title="Paramètres">
+          <button class="icon-btn" id="settingsBtn" title="Paramètres et état du serveur" aria-label="Paramètres">
             <i class="fas fa-cog"></i>
           </button>
         </div>
       </div>
+      <div class="server-warning" id="serverWarning" hidden></div>
     </header>
 
-    <!-- DOWNLOAD FORM -->
+    <!-- FORMULAIRE -->
     <section class="download-section">
       <div class="download-card">
-        <form id="downloadForm" class="download-form">
-          
-          <!-- URL Input -->
+        <form id="downloadForm" class="download-form" autocomplete="off">
+
           <div class="form-group">
             <label for="urlInput" class="form-label">
               <i class="fas fa-link"></i>
-              URLs de téléchargement
+              Liens (un par ligne)
             </label>
-            <textarea 
-              id="urlInput"
-              name="url" 
-              class="input-field textarea-field" 
-              placeholder="Collez vos liens ici (un par ligne pour téléchargement multiple)..." 
-              required
-              rows="4"
+            <textarea id="urlInput" name="url" class="input-field textarea-field"
+              placeholder="Collez un lien de vidéo, de page web, de playlist .m3u8/.mpd ou de fichier…" required rows="4"
               spellcheck="false"></textarea>
             <div class="input-hint">
               <i class="fas fa-info-circle"></i>
-              Supporte: HTTP/HTTPS, HLS (m3u8), DASH (mpd), YouTube, Vimeo, Twitch...
+              YouTube, Vimeo (même privé via l'extension), TikTok, Instagram, Pinterest, HLS, DASH, pages web, fichiers…
             </div>
           </div>
 
-          <!-- Advanced Options Toggle -->
-          <button type="button" class="advanced-toggle" id="advToggle">
+          <div class="quick-options">
+            <label class="select-label" for="qualitySelect">
+              <i class="fas fa-photo-film"></i>
+              Qualité
+              <select id="qualitySelect" name="quality" class="input-field select-field">
+                <option value="best">Meilleure</option>
+                <option value="2160">4K (2160p)</option>
+                <option value="1440">1440p</option>
+                <option value="1080">1080p</option>
+                <option value="720">720p</option>
+                <option value="480">480p</option>
+                <option value="360">360p</option>
+                <option value="audio">Audio seul (MP3)</option>
+              </select>
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" name="playlist">
+              <span class="checkbox-text"><i class="fas fa-list"></i> Playlist entière</span>
+            </label>
+          </div>
+
+          <button type="button" class="advanced-toggle" id="advToggle" aria-expanded="false">
             <i class="fas fa-sliders-h"></i>
             <span>Options avancées</span>
             <i class="fas fa-chevron-down toggle-icon"></i>
           </button>
 
-          <!-- Advanced Options -->
           <div class="advanced-options" id="advOptions">
             <div class="options-grid">
               <div class="form-group">
-                <label class="form-label">
-                  <i class="fas fa-file-signature"></i>
-                  Nom du fichier
-                </label>
-                <input 
-                  type="text" 
-                  name="customFilename" 
-                  class="input-field" 
-                  placeholder="mon_fichier (optionnel)"
-                  maxlength="255">
+                <label class="form-label" for="customFilename"><i class="fas fa-file-signature"></i> Nom du fichier</label>
+                <input type="text" id="customFilename" name="customFilename" class="input-field" placeholder="mon_fichier (optionnel)" maxlength="200">
               </div>
-
               <div class="form-group">
-                <label class="form-label">
-                  <i class="fas fa-link"></i>
-                  Referer
-                </label>
-                <input 
-                  type="url" 
-                  name="referer" 
-                  class="input-field" 
-                  placeholder="https://example.com">
+                <label class="form-label" for="refererInput"><i class="fas fa-link"></i> Referer (page d'origine)</label>
+                <input type="url" id="refererInput" name="referer" class="input-field" placeholder="https://site-qui-contient-la-video.com/page">
               </div>
             </div>
-
             <div class="options-grid">
               <div class="form-group">
-                <label class="form-label">
-                  <i class="fas fa-user-secret"></i>
-                  User-Agent
-                </label>
-                <input 
-                  type="text" 
-                  name="ua" 
-                  id="uaInput"
-                  class="input-field" 
-                  placeholder="User-Agent personnalisé">
+                <label class="form-label" for="uaInput"><i class="fas fa-user-secret"></i> User-Agent</label>
+                <input type="text" name="ua" id="uaInput" class="input-field" placeholder="User-Agent personnalisé">
               </div>
-
               <div class="form-group">
-                <label class="form-label">
-                  <i class="fas fa-cookie"></i>
-                  Cookies
-                </label>
-                <input 
-                  type="text" 
-                  name="cookies" 
-                  class="input-field" 
-                  placeholder="session=abc123; token=xyz">
+                <label class="form-label" for="cookiesInput"><i class="fas fa-cookie"></i> Cookies</label>
+                <input type="text" id="cookiesInput" name="cookies" class="input-field" placeholder="session=abc123; token=xyz">
               </div>
             </div>
-
+            <div class="options-grid">
+              <div class="form-group">
+                <label class="form-label" for="formatInput"><i class="fas fa-code"></i> Format yt-dlp (expert)</label>
+                <input type="text" id="formatInput" name="format" class="input-field" placeholder="ex : bv*[ext=mp4]+ba[ext=m4a]/b" maxlength="200">
+              </div>
+            </div>
             <div class="checkbox-group-container">
               <label class="checkbox-label">
-                <input type="checkbox" name="noCheckCert">
-                <span class="checkbox-text">
-                  <i class="fas fa-shield-slash"></i>
-                  Ignorer les certificats SSL
-                </span>
+                <input type="checkbox" name="subtitles">
+                <span class="checkbox-text"><i class="fas fa-closed-captioning"></i> Sous-titres (fr/en)</span>
               </label>
-              
+              <label class="checkbox-label">
+                <input type="checkbox" name="noCheckCert">
+                <span class="checkbox-text"><i class="fas fa-shield-halved"></i> Ignorer les certificats SSL</span>
+              </label>
               <label class="checkbox-label">
                 <input type="checkbox" name="singleSegment">
-                <span class="checkbox-text">
-                  <i class="fas fa-stream"></i>
-                  Mode mono-segment (connexion unique)
-                </span>
+                <span class="checkbox-text"><i class="fas fa-stream"></i> Connexion unique (serveurs capricieux)</span>
               </label>
             </div>
           </div>
 
-          <!-- Submit Button -->
-          <button type="submit" class="btn-primary btn-submit" id="submitBtn">
-            <i class="fas fa-bolt"></i>
-            <span>Analyser et télécharger</span>
-          </button>
+          <div class="form-actions">
+            <button type="button" class="btn-secondary btn-analyze" id="analyzeBtn" title="Voir ce que contient le lien avant de télécharger">
+              <i class="fas fa-magnifying-glass"></i>
+              <span>Analyser</span>
+            </button>
+            <button type="submit" class="btn-primary btn-submit" id="submitBtn">
+              <i class="fas fa-bolt"></i>
+              <span>Télécharger</span>
+            </button>
+          </div>
         </form>
       </div>
     </section>
 
-    <!-- ACTIVE DOWNLOADS -->
+    <!-- RÉSULTAT D'ANALYSE -->
+    <section class="analysis-section" id="analysisSection" hidden>
+      <div class="analysis-card" id="analysisCard"></div>
+    </section>
+
+    <!-- TÉLÉCHARGEMENTS ACTIFS -->
     <section class="downloads-section">
       <div class="section-header">
         <div class="section-title-wrapper">
           <h2 class="section-title">
             <i class="fas fa-microchip"></i>
-            Téléchargements actifs
+            Téléchargements
           </h2>
-          <span class="badge-count" id="activeCount">0</span>
+          <span class="badge-count" id="activeCount" title="En cours">0</span>
         </div>
         <div class="section-actions">
-          <button class="btn-secondary" id="refreshActiveBtn" title="Rafraîchir">
-            <i class="fas fa-sync-alt"></i>
+          <button class="btn-secondary" id="clearFinishedBtn" title="Retirer les éléments terminés de la liste">
+            <i class="fas fa-broom"></i>
+            Nettoyer
           </button>
           <button class="btn-danger" id="cancelAllBtn">
             <i class="fas fa-stop-circle"></i>
@@ -186,16 +174,10 @@
           </button>
         </div>
       </div>
-      
-      <div id="activeList" class="downloads-list">
-        <div class="empty-state">
-          <i class="fas fa-cloud-download-alt"></i>
-          <p>En attente de nouveaux téléchargements...</p>
-        </div>
-      </div>
+      <div id="activeList" class="downloads-list"></div>
     </section>
 
-    <!-- DOWNLOAD HISTORY -->
+    <!-- BIBLIOTHÈQUE -->
     <section class="downloads-section history-section">
       <div class="section-header">
         <div class="section-title-wrapper">
@@ -206,19 +188,19 @@
           <span class="badge-count success" id="historyCount">0</span>
         </div>
         <div class="section-actions">
-          <button class="btn-secondary" id="refreshHistoryBtn" title="Rafraîchir">
+          <input type="search" id="librarySearch" class="input-field search-field" placeholder="Rechercher…" aria-label="Rechercher dans la bibliothèque">
+          <button class="btn-secondary" id="refreshHistoryBtn" title="Rafraîchir" aria-label="Rafraîchir">
             <i class="fas fa-sync-alt"></i>
           </button>
           <button class="btn-secondary" id="clearHistoryBtn">
             <i class="fas fa-trash-alt"></i>
-            Vider l'historique
+            Tout supprimer
           </button>
         </div>
       </div>
-      
+
       <div id="historyList" class="downloads-list"></div>
 
-      <!-- Pagination -->
       <div class="pagination-container" id="paginationControls" style="display: none;">
         <button class="btn-pagination" id="prevPage">
           <i class="fas fa-arrow-left"></i>
@@ -234,25 +216,31 @@
       </div>
     </section>
 
-    <!-- FOOTER -->
     <footer class="main-footer">
       <div class="footer-content">
         <div class="footer-info">
           <i class="fas fa-code"></i>
-          Made with <i class="fas fa-heart" style="color: #ef4444;"></i> by Web Wget Pro Team
+          Web Wget Pro — aria2c · yt-dlp · ffmpeg
         </div>
-        <div class="footer-version">
-          v3.0.0
-        </div>
+        <div class="footer-version" id="footerVersion">v4.0.0</div>
       </div>
     </footer>
-
   </div>
 
-  <!-- NOTIFICATION TOAST -->
-  <div id="toastContainer" class="toast-container"></div>
+  <!-- FENÊTRE (paramètres / lecteur) -->
+  <div class="modal" id="modal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal-header">
+        <h3 id="modalTitle"></h3>
+        <button class="icon-btn" data-close aria-label="Fermer"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+    </div>
+  </div>
 
-  <!-- Scripts -->
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
   <script src="app.js"></script>
 </body>
 

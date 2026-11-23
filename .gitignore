@@ -38,3 +38,6 @@ downloads/
 # Misc
 coverage/
 .cache/
+# v4 : fichiers temporaires
+active_downloads.json.tmp
+server.log.*

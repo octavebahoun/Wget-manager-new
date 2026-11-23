@@ -1,126 +1,95 @@
-# Web Wget | Premium Downloader
+# Web Wget Pro v4
 
-⚡ Télécharger des vidéos et fichiers via serveur distant avec **aria2c + ffmpeg**
-Supporte : DASH / HLS / MP4 / Vimeo / sites avec headers personnalisés
+Télécharge vidéos, flux et fichiers via un serveur **aria2c + yt-dlp + ffmpeg**, avec une interface web et une extension Chrome.
 
----
-
-## Fonctionnalités
-
-* Téléchargement haute performance multi-segment
-* Suivi en temps réel des téléchargements via **SSE**
-* Historique des téléchargements et possibilité d’annulation
-* Support **User-Agent**, **Referer**, **Cookies**
-* Extension navigateur pour un clic-droit → télécharger directement depuis la page
-* Option fusion audio+video pour DASH / HLS
-
----
-
-## Prérequis
-
-* Node.js >= 20
-* npm ou yarn
-* aria2c installé ([https://aria2.github.io/](https://aria2.github.io/))
-* ffmpeg installé (optionnel pour fusion audio/video) 
-
----
-
-## Installation
-
-1. Cloner le dépôt
-
-```bash
-git clone https://github.com/octavebahoun/Wget-manager-new
-cd Wget-manager-new
-```
-
-2. Installer les dépendances
+## Démarrage rapide
 
 ```bash
 npm install
+npm start            # puis ouvrir http://localhost:3000
 ```
 
-3. Créer le fichier `.env` à la racine
+Outils nécessaires sur le serveur : `aria2c`, `ffmpeg`, `yt-dlp` (à garder à jour : `pipx upgrade yt-dlp`).
+
+---
+
+## Ce que ça sait faire
+
+| Lien collé / détecté | Moteur utilisé |
+|---|---|
+| YouTube, Vimeo, TikTok, Instagram, Pinterest, X, Twitch… | yt-dlp |
+| Flux HLS (`.m3u8`) / DASH (`.mpd`) | yt-dlp, secours ffmpeg |
+| Vimeo privé/intégré (`playlist.json`, `master.json`) | moteur Vimeo intégré (segments + fusion ffmpeg) |
+| Fichier direct (mp4, pdf, zip…) | aria2c (16 connexions, reprise) |
+| Page web quelconque | yt-dlp, puis **scraping** de la page (balises vidéo, JSON, lecteurs intégrés) |
+
+- **Bouton Analyser** : montre le titre, les qualités disponibles et tous les médias trouvés dans la page avant de télécharger.
+- **Qualité** : meilleure, 4K → 360p, ou audio MP3. Option « Playlist entière ».
+- **Détection automatique du vrai contenu** : un lien qui renvoie une playlist ou une page change tout seul de moteur.
+- **Fiable** : nouvelles tentatives sur erreur réseau, reprise après redémarrage du serveur, annulation propre (aucun fichier partiel dans la bibliothèque).
+- **Bibliothèque** : lecture dans le navigateur, téléchargement sur le PC, « récupérer puis supprimer », recherche.
+
+## Extension Chrome
+
+1. `chrome://extensions` → activer le **mode développeur**
+2. **Charger l'extension non empaquetée** → dossier `extension/`
+3. Options de l'extension → adresse du serveur (par défaut `http://localhost:3000`) → **Tester la connexion**
+
+Elle détecte les médias **pendant la lecture** (réseau + page, iframes comprises) et envoie au serveur les en-têtes et cookies nécessaires (vidéos de cours privées, comptes connectés).
+
+- Clic droit sur un lien / une vidéo / la page → **Télécharger avec Web Wget**
+- `Ctrl+Shift+D` : envoie le meilleur média de la page
+- Option **Rapatrier sur ce PC** : le fichier arrive dans « Téléchargements » quand le serveur a fini
+- Vidéo non détectée ? Lancez la lecture quelques secondes puis cliquez sur ↻
+
+## Configuration (`.env`, tout est optionnel)
 
 ```env
 PORT=3000
-ALLOWED_DOMAINS=vimeo.com,vimeocdn.com,youtube.com
-DOWNLOAD_TIMEOUT=3600
-MAX_FILE_SIZE=5G
+# HOST=127.0.0.1               # écouter seulement en local
+# API_KEY=une-cle-secrete      # obligatoire si le serveur est accessible depuis Internet
+# ALLOWED_DOMAINS=vimeo.com,youtube.com   # vide = tous les domaines
+# ALLOWED_ORIGIN=https://mon-interface.example
+MAX_CONCURRENT_DOWNLOADS=5
+MAX_FILE_SIZE=5G               # 0 = illimité
+DOWNLOAD_TIMEOUT=14400         # secondes (0 = illimité)
+RETRY_ATTEMPTS=2
+# DOWNLOADS_DIR=downloads
+# ARIA2_CONNECTIONS=16
+# YTDLP_CONCURRENT_FRAGMENTS=8
+# MERGE_FORMAT=mp4
+# YTDLP_EXTRA_ARGS=--impersonate chrome
+# DELETE_AFTER_TRANSFER=true   # "récupérer" supprime le fichier du serveur
+# ALLOW_PRIVATE_NETWORKS=false # autoriser les adresses du réseau local
 ```
-4. Créer le dossier `downloads` à la racine si elle n'apparait pas apres npm install
-```env
-Cela est necessaire pour récupérer vos téléchargement 
-```
----
 
-## Lancer le serveur
+**Sécurité** : sans `API_KEY`, n'exposez pas le serveur sur Internet. Avec `API_KEY`, les requêtes venant de la machine elle-même restent autorisées (`TRUST_LOCALHOST=false` pour l'interdire). Les adresses locales/privées sont bloquées (anti-SSRF).
+
+## API
+
+| Méthode | Route | Rôle |
+|---|---|---|
+| POST | `/download` | lancer un ou plusieurs téléchargements (`url` ou `urls[]`, `quality`, `playlist`, `customFilename`, `referer`, `cookies`, `cookieJar`…) |
+| POST | `/api/analyze` | analyser un lien sans télécharger |
+| GET | `/api/jobs` | liste des téléchargements (`?ids=a,b`) |
+| POST | `/cancel`, `/cancel-all`, `/retry` | annuler / relancer |
+| GET | `/events` | temps réel (SSE) |
+| GET | `/history` | fichiers de la bibliothèque |
+| GET | `/files/<chemin>` · `/dl/<chemin>` · `/transfer/<chemin>` | lire · télécharger · télécharger puis supprimer |
+| DELETE | `/files/<chemin>` · `/clear-history` | supprimer un fichier / tout |
+| GET | `/health` · `/config` | état du serveur et des outils |
+
+Clé API : en-tête `X-API-Key` (ou `?api_key=` pour les liens et le SSE).
+
+## Développement
 
 ```bash
-node server.js ou utiliser nodemon server.js  mais faire npm install nodemon en premier
+npm test      # tests unitaires (node --test)
+npm run dev
 ```
 
-Le serveur sera accessible à l’adresse :
-
-```
-http://localhost:3000
-```
-
----
-
-## Utilisation Web
-
-1. Ouvrir `http://localhost:3000` dans votre navigateur
-2. Coller l’URL du fichier / vidéo
-3. Remplir les options facultatives :
-
-   * Nom du fichier personnalisé
-   * Referer (pré-rempli automatiquement par l’extension)
-   * User-Agent (pré-rempli automatiquement)
-   * Ignorer le certificat SSL si nécessaire
-4. Cliquer sur **“Démarrer le téléchargement”**
-5. Suivre la progression et gérer les téléchargements actifs ou l’historique
-
----
-
-## Avec l’extension navigateur
-
-1. Aller dans `chrome://extensions` (ou `edge://extensions`)
-2. Activer **Mode développeur**
-3. Cliquer sur **“Charger l’extension non empaquetée”**
-4. Sélectionner le dossier `extension/` dans le dossier cloné
-5. Cliquer droit sur un lien vidéo → **“Download with Web Wget”**// peut ne pas fonctionner 
-6. Vous pouvez aussi copier le lien clické sur l'icone de l'extension et telecharger la vidéo 
-
----
-
-## Endpoints disponibles
-
-* `POST /download` : démarrer un téléchargement
-* `GET /history` : récupérer l’historique
-* `GET /clear-history` : vider l’historique et supprimer les fichiers
-* `POST /cancel` : annuler un téléchargement
-* `POST /cancel-all` : annuler tous les téléchargements actifs
-* `GET /events` : SSE pour progression en temps réel
-* `GET /config` : récupérer la configuration (ALLOWED_DOMAINS, etc.)
-
----
-
-## Contribution
-
-* Fork → branche → Pull Request
-* Issues pour bugs ou idées
-* Contributions possibles :
-
-  * Extension Firefox
-  * Support DASH/HLS avancé
-  * Optimisation des performances et sécurité
-  * Interface web / UI
-
----
+Structure : `server.js` (routes) · `lib/` (détection, scraping, file d'attente, sécurité) · `lib/engines/` (aria2, yt-dlp, ffmpeg, Vimeo) · `public/` (interface) · `extension/` (Chrome MV3).
 
 ## Licence
 
-MIT License © OctaveBAHOUN-HOUTOUKPE
-
-
+MIT © OctaveBAHOUN-HOUTOUKPE

@@ -1,559 +1,335 @@
-// popup.js - Interface utilisateur de l'extension
-// ================= CONSTANTS =================
-const CONFIG = {
-  SERVER_URL: "http://localhost:3000",
-  AUTO_CLOSE_DELAY: 1500,
-  FILENAME_MAX_LENGTH: 255,
-  URL_PREVIEW_LENGTH: 30,
-  STATUS_TIMEOUT: 5000,
-  MESSAGE_TIMEOUT: 10000
+// popup.js — fenêtre de l'extension : liste des médias, envoi au serveur, suivi
+import { getSettings, classifyMedia, displayName, hostOf, formatBytes, KIND_LABELS, VERSION } from './common.js';
+
+const ICONS = {
+  up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>',
+  down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
+  refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg>',
+  gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+  grid: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
 };
 
-const STATUS_TYPES = {
-  SUCCESS: 'success',
-  ERROR: 'error',
-  INFO: 'info',
-  WARNING: 'warning'
+// Ces types ont besoin du serveur (assemblage de flux / extraction)
+const SERVER_ONLY = new Set(['hls', 'dash', 'vimeo-json', 'platform', 'page']);
+const JOB_LABELS = {
+  queued: 'En file', analyzing: 'Analyse', downloading: 'En cours', processing: 'Finalisation',
+  retrying: 'Nouvel essai', completed: 'Terminé', error: 'Échec', cancelled: 'Annulé',
 };
 
-const MESSAGE_TYPES = {
-  FETCH_CONTEXT: "FETCH_CONTEXT",
-  GET_TAB_STATUS: "GET_TAB_STATUS"
-};
+const $ = (id) => document.getElementById(id);
+const state = { tab: null, items: [], selectedUrl: null, urlEdited: false, settings: null, jobsTimer: null };
 
-// ================= DOM ELEMENTS =================
-const elements = {
-  urlInput: document.getElementById("url"),
-  filenameInput: document.getElementById("filename"),
-  statusEl: document.getElementById("status"),
-  sendBtn: document.getElementById("send"),
-  downloadLocalBtn: document.getElementById("downloadLocal"),
-  videoSelector: document.getElementById("videoSelector"),
-  videoSelectorContainer: document.getElementById("videoSelectorContainer"),
-  manualScanBtn: document.getElementById("manualScan"),
-  refreshBtn: document.getElementById("refresh"),
-  clearBtn: document.getElementById("clear")
-};
-
-// ================= STATE MANAGEMENT =================
-class PopupState {
-  constructor() {
-    this.context = null;
-    this.isLoading = false;
-    this.selectedVideoUrl = null;
+// ================= OUTILS =================
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v === undefined || v === null || v === false) continue;
+    if (k === 'class') node.className = v;
+    else if (k === 'text') node.textContent = v;
+    else if (k === 'icon') node.innerHTML = ICONS[v] || '';
+    else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
+    else node.setAttribute(k, v === true ? '' : v);
   }
-
-  setContext(context) {
-    this.context = context;
-  }
-
-  setLoading(loading) {
-    this.isLoading = loading;
-    this.updateUI();
-  }
-
-  updateUI() {
-    if (elements.sendBtn) {
-      elements.sendBtn.disabled = this.isLoading;
-    }
-    if (elements.downloadLocalBtn) {
-      elements.downloadLocalBtn.disabled = this.isLoading;
-    }
-    if (elements.manualScanBtn) {
-      elements.manualScanBtn.disabled = this.isLoading;
-    }
-  }
+  for (const c of children.flat()) if (c !== null && c !== undefined && c !== false) node.append(c);
+  return node;
 }
 
-const state = new PopupState();
-
-// ================= UTILITY FUNCTIONS =================
-// Afficher un message de statut
-function showStatus(message, type = STATUS_TYPES.INFO, duration = null) {
-  if (!elements.statusEl) return;
-
-  elements.statusEl.textContent = message;
-  elements.statusEl.className = `${type} visible`;
-
-  if (duration) {
-    setTimeout(() => {
-      elements.statusEl.classList.remove('visible');
-    }, duration);
-  }
-}
-
-// Nettoyer un nom de fichier
-function sanitizeFilename(filename) {
-  if (!filename) return '';
-
-  return filename
-    .trim()
-    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
-    .replace(/\s+/g, '_')
-    .substring(0, CONFIG.FILENAME_MAX_LENGTH);
-}
-
-// Extraire le nom de fichier d'une URL
-function extractFilenameFromUrl(url) {
-  try {
-    const urlObj = new URL(url);
-    const pathname = urlObj.pathname;
-    const filename = pathname.split('/').pop().split('?')[0];
-    return filename || 'download';
-  } catch (e) {
-    return 'download';
-  }
-}
-
-// Tronquer une chaîne pour l'affichage
-function truncateString(str, maxLength = CONFIG.URL_PREVIEW_LENGTH) {
-  if (!str) return '';
-  return str.length > maxLength ? str.substring(0, maxLength) + '...' : str;
-}
-
-// Vérifier si une URL est un stream
-function isStreamUrl(url) {
-  if (!url) return false;
-
-  const streamPatterns = [
-    /\.(m3u8|mpd|f4m|ism)/i,
-    /\/manifest\//i,
-    /\/playlist\./i,
-    /googlevideo\.com/i
-  ];
-
-  return streamPatterns.some(pattern => pattern.test(url));
-}
-
-// Valider une URL
-function isValidUrl(url) {
-  if (!url || typeof url !== 'string') return false;
-
-  try {
-    const urlObj = new URL(url);
-    return ['http:', 'https:'].includes(urlObj.protocol);
-  } catch (e) {
-    return false;
-  }
-}
-
-// Formater le nombre de flux détectés
-function formatStreamCount(count) {
-  if (count === 0) return 'Aucun flux détecté';
-  if (count === 1) return '1 flux détecté';
-  return `${count} flux détectés`;
-}
-
-// ================= CONTEXT FETCHING =================
-async function fetchContext() {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error('Timeout: Le serveur ne répond pas'));
-    }, CONFIG.MESSAGE_TIMEOUT);
-
-    chrome.runtime.sendMessage(
-      { type: MESSAGE_TYPES.FETCH_CONTEXT },
-      (response) => {
-        clearTimeout(timeout);
-
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-
-        if (!response) {
-          reject(new Error('Aucune réponse du background script'));
-          return;
-        }
-
-        if (response.error) {
-          reject(new Error(response.error));
-          return;
-        }
-
-        resolve(response);
-      }
-    );
+function send(message) {
+  return chrome.runtime.sendMessage(message).then((res) => {
+    if (res && res.error) throw new Error(res.error);
+    return res;
   });
 }
 
-// ================= UI UPDATE FUNCTIONS =================
-// Mettre à jour la liste déroulante des vidéos
-function updateVideoSelector(videos) {
-  if (!elements.videoSelector) return;
-
-  // Réinitialiser le sélecteur
-  elements.videoSelector.innerHTML = '<option value="">-- Choisir une vidéo détectée --</option>';
-
-  if (!videos || videos.length === 0) {
-    elements.videoSelectorContainer.style.display = "none";
-    return;
-  }
-
-  // Afficher le conteneur
-  elements.videoSelectorContainer.style.display = "block";
-
-  // Ajouter les vidéos détectées
-  videos.forEach((videoUrl, index) => {
-    const option = document.createElement("option");
-    option.value = videoUrl;
-
-    const filename = extractFilenameFromUrl(videoUrl);
-    const displayName = truncateString(filename, 40);
-    option.textContent = `${index + 1}. ${displayName}`;
-    option.title = videoUrl; // Afficher l'URL complète au survol
-
-    elements.videoSelector.appendChild(option);
-  });
-
-  // Pré-remplir l'URL si vide
-  if (!elements.urlInput.value && videos.length > 0) {
-    elements.urlInput.value = videos[0];
-    state.selectedVideoUrl = videos[0];
-  }
+let statusTimer = null;
+function showStatus(text, type = 'info', duration = 0) {
+  const s = $('status');
+  s.textContent = text;
+  s.className = `status visible ${type}`;
+  clearTimeout(statusTimer);
+  if (duration) statusTimer = setTimeout(() => s.classList.remove('visible'), duration);
 }
 
-// Mettre à jour le nom de fichier suggéré
-function updateFilename(context) {
-  if (!elements.filenameInput || elements.filenameInput.value) return;
-
-  let suggestedName = '';
-
-  // Essayer d'utiliser le titre de la page
-  if (context.pageTitle) {
-    suggestedName = sanitizeFilename(context.pageTitle);
-  }
-
-  // Fallback sur l'URL si pas de titre
-  if (!suggestedName && context.pageUrl) {
-    try {
-      const urlObj = new URL(context.pageUrl);
-      suggestedName = sanitizeFilename(urlObj.hostname);
-    } catch (e) {
-      suggestedName = 'download';
-    }
-  }
-
-  elements.filenameInput.value = suggestedName;
+function setBusy(busy) {
+  for (const id of ['send', 'local', 'rescan']) $(id).disabled = busy;
 }
 
-// Afficher le statut de détection
-function updateDetectionStatus(context) {
-  if (!context) return;
-
-  // Priorité: DRM > Blob > Streams > Aucun
-  if (context.isDrm || context.hasDrm) {
-    showStatus("⚠️ Contenu protégé par DRM détecté", STATUS_TYPES.WARNING);
-  } else if (context.isBlob || context.hasBlob) {
-    showStatus("ℹ️ Contenu Blob détecté", STATUS_TYPES.INFO);
-  } else if (context.detectedVideos && context.detectedVideos.length > 0) {
-    const count = context.detectedVideos.length;
-    showStatus(`✓ ${formatStreamCount(count)}`, STATUS_TYPES.SUCCESS);
+// ================= SERVEUR =================
+async function checkServer() {
+  const pill = $('serverPill');
+  const text = $('serverText');
+  const res = await send({ type: 'SERVER_STATUS' }).catch((e) => ({ ok: false, error: e.message }));
+  pill.classList.toggle('ok', !!res.ok);
+  pill.classList.toggle('ko', !res.ok);
+  if (res.ok) {
+    const active = (res.jobs?.running || 0) + (res.jobs?.queued || 0);
+    text.textContent = active ? `${active} en cours` : 'Serveur prêt';
+    pill.title = `Web Wget ${res.version || ''} — ${state.settings.serverUrl}`;
+    const b = res.binaries || {};
+    if (!b.ytdlp) addBanner('warn', 'yt-dlp n\'est pas installé sur le serveur : les plateformes (YouTube…) ne marcheront pas.');
+    else if (b.ytdlpAgeDays > 60) addBanner('warn', `yt-dlp du serveur date de ${b.ytdlpAgeDays} jours : mettez-le à jour (pipx upgrade yt-dlp).`);
   } else {
-    showStatus("Aucun flux détecté pour le moment...", STATUS_TYPES.INFO, CONFIG.STATUS_TIMEOUT);
+    text.textContent = 'Hors ligne';
+    pill.title = res.error || 'Serveur injoignable';
+    addBanner('error', `Serveur injoignable (${state.settings.serverUrl}). Lancez « npm start » ou réglez l'adresse dans les options.`);
+  }
+  return res.ok;
+}
+
+function addBanner(type, text) {
+  $('banners').append(el('div', { class: `banner ${type}`, text }));
+}
+
+// ================= LISTE DES MÉDIAS =================
+function itemMeta(item) {
+  const parts = [];
+  if (item.isPage) parts.push('lien de la page');
+  if (item.height) parts.push(`${item.height}p`);
+  if (item.duration) parts.push(`${Math.floor(item.duration / 60)}:${String(item.duration % 60).padStart(2, '0')}`);
+  if (item.size) parts.push(formatBytes(item.size));
+  if (item.source && !item.isPage) parts.push(item.source);
+  parts.push(hostOf(item.url));
+  return parts.filter(Boolean).join(' · ');
+}
+
+function badgeText(item) {
+  if (item.isPage) return 'PAGE';
+  const fixed = { platform: 'LECTEUR', 'vimeo-json': 'VIMEO', hls: 'HLS', dash: 'DASH' }[item.kind];
+  if (fixed) return fixed;
+  return String(item.typeLabel || KIND_LABELS[item.kind] || item.kind).toUpperCase().slice(0, 6);
+}
+
+function selectItem(item) {
+  state.selectedUrl = item.url;
+  state.urlEdited = false;
+  $('url').value = item.url;
+  for (const node of $('list').children) node.classList.toggle('selected', node.dataset.url === item.url);
+  $('local').disabled = SERVER_ONLY.has(item.kind);
+}
+
+function renderItems() {
+  const list = $('list');
+  list.replaceChildren();
+  const items = state.items;
+  $('listTitle').textContent = items.length ? `Médias détectés (${items.length})` : 'Médias détectés';
+  const sendable = items.filter((i) => i.kind !== 'file');
+  $('sendAll').hidden = sendable.length < 2;
+  $('sendAll').textContent = `Tout envoyer (${sendable.length})`;
+
+  if (!items.length) {
+    list.append(el('div', { class: 'empty', text: 'Rien de détecté pour l\'instant. Lancez la lecture de la vidéo puis cliquez sur ↻.' }));
+    return;
+  }
+  for (const item of items) {
+    const name = item.isPage ? (state.tab.title || displayName(item.url)) : (item.label || displayName(item.url));
+    const row = el('div', { class: 'item', 'data-url': item.url, title: item.url, onclick: () => selectItem(item) },
+      el('span', { class: `badge k-${item.kind}`, text: badgeText(item) }),
+      el('div', { class: 'item-main' },
+        el('div', { class: 'item-name', text: name }),
+        el('div', { class: 'item-meta', text: itemMeta(item) })),
+      el('div', { class: 'item-actions' },
+        el('button', { title: 'Envoyer au serveur', icon: 'up', onclick: (e) => { e.stopPropagation(); sendItems([item]); } }),
+        el('button', {
+          title: SERVER_ONLY.has(item.kind) ? 'Ce type passe par le serveur' : 'Télécharger sur ce PC',
+          icon: 'down',
+          disabled: SERVER_ONLY.has(item.kind),
+          onclick: (e) => { e.stopPropagation(); downloadLocal(item); },
+        }),
+        el('button', { title: 'Copier le lien', icon: 'copy', onclick: (e) => { e.stopPropagation(); copyUrl(item.url); } })));
+    list.append(row);
   }
 }
 
-// ================= REFRESH UI =================
-async function refreshUI() {
-  if (state.isLoading) return;
+function renderFlags(flags) {
+  if (flags.drm) addBanner('error', 'DRM détecté : la vidéo protégée ne pourra pas être téléchargée (les autres médias, oui).');
+  else if (flags.mse && !state.items.some((i) => ['hls', 'dash', 'vimeo-json', 'platform'].includes(i.kind))) {
+    addBanner('info', 'Lecteur en « blob: » : lancez la lecture puis ↻ pour capter le flux HLS/DASH.');
+  }
+}
 
-  state.setLoading(true);
-  showStatus("🔍 Analyse de la page...", STATUS_TYPES.INFO);
-
+async function scan() {
+  setBusy(true);
   try {
-    const context = await fetchContext();
-    state.setContext(context);
-
-    // Consolidate video sources (Network + DOM)
-    const streams = context.streams || [];
-    const domVideos = context.detectedVideos || [];
-    // Merge and deduplicate
-    const allVideos = [...new Set([...streams, ...domVideos])];
-
-    // Mettre à jour l'interface
-    updateVideoSelector(allVideos);
-
-    // Auto-fill URL with page URL if no video selected/found and input is empty
-    if (!elements.urlInput.value && context.pageUrl) {
-      // If we have videos, updateVideoSelector might have already picked the first one.
-      // If it didn't (e.g. empty list), we use any available page URL.
-      // We check if the input is STILL empty after updateVideoSelector
-      if (!elements.urlInput.value) {
-        elements.urlInput.value = context.pageUrl;
-      }
-    }
-
-    updateFilename(context);
-    updateDetectionStatus({ ...context, detectedVideos: allVideos });
-
-  } catch (error) {
-    console.error('[POPUP] Erreur refresh:', error);
-    showStatus(`❌ ${error.message}`, STATUS_TYPES.ERROR, CONFIG.STATUS_TIMEOUT);
+    const res = await send({ type: 'GET_MEDIA', tabId: state.tab.id });
+    state.items = res.items || [];
+    renderItems();
+    renderFlags(res.flags || {});
+    const best = state.items.find((i) => i.kind !== 'file') || state.items[0];
+    if (best && !state.urlEdited && (!$('url').value || $('url').value === state.selectedUrl)) selectItem(best);
+    else if (!best && !$('url').value && /^https?:/i.test(state.tab.url || '')) $('url').value = state.tab.url;
+  } catch (e) {
+    $('list').replaceChildren(el('div', { class: 'empty', text: `Analyse impossible : ${e.message}` }));
   } finally {
-    state.setLoading(false);
+    setBusy(false);
   }
 }
 
-// ================= DOWNLOAD FUNCTIONS =================
-// Téléchargement via serveur
-async function downloadViaServer() {
-  const url = elements.urlInput.value?.trim();
-  const customFilename = elements.filenameInput.value?.trim();
+// ================= ACTIONS =================
+function currentItem() {
+  const url = $('url').value.trim();
+  if (!/^https?:\/\//i.test(url)) return null;
+  const known = state.items.find((i) => i.url === url);
+  if (known) return known;
+  return { url, kind: classifyMedia(url)?.kind || 'page', referer: state.tab.url };
+}
 
-  // Validation
-  if (!url) {
-    showStatus("⚠️ Veuillez entrer une URL", STATUS_TYPES.WARNING);
-    elements.urlInput.focus();
-    return;
-  }
-
-  if (!isValidUrl(url)) {
-    showStatus("❌ URL invalide", STATUS_TYPES.ERROR);
-    elements.urlInput.focus();
-    return;
-  }
-
-  state.setLoading(true);
-  showStatus("📡 Connexion au serveur...", STATUS_TYPES.INFO);
-
+async function sendItems(items) {
+  if (!items.length) return;
+  setBusy(true);
+  showStatus(items.length > 1 ? `Envoi de ${items.length} médias…` : 'Envoi au serveur…', 'info');
   try {
-    // Récupérer le contexte si pas déjà fait
-    if (!state.context) {
-      state.context = await fetchContext();
-    }
-
-    showStatus("📤 Envoi de la requête...", STATUS_TYPES.INFO);
-
-    const response = await fetch(`${CONFIG.SERVER_URL}/download`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-      },
-      body: JSON.stringify({
-        url,
-        customFilename: customFilename || null,
-        referer: state.context.pageUrl || state.context.referer,
-        ua: state.context.ua,
-        cookies: state.context.cookies || ''
-      })
-    });
-
-    const data = await response.json();
-
-    if (response.ok) {
-      showStatus("✅ Téléchargement démarré !", STATUS_TYPES.SUCCESS);
-
-      // Fermer la popup après un délai
-      setTimeout(() => {
-        window.close();
-      }, CONFIG.AUTO_CLOSE_DELAY);
+    const filename = $('filename').value.trim();
+    const res = await send({ type: 'SEND', tabId: state.tab.id, items, options: { quality: $('quality').value, filename } });
+    if (res.ok) {
+      const extra = res.errors.length ? ` (${res.errors.length} refusé(s) : ${res.errors[0]})` : '';
+      showStatus(`✓ ${res.jobs.length} téléchargement(s) lancé(s) sur le serveur${extra}`, res.errors.length ? 'warning' : 'success', 6000);
+      $('filename').value = '';
+      loadJobs();
+      if (state.settings.autoClose && !res.errors.length) setTimeout(() => window.close(), 1200);
     } else {
-      showStatus(`❌ ${data.error || 'Erreur serveur'}`, STATUS_TYPES.ERROR);
+      showStatus(`✗ ${res.errors[0] || 'Échec de l\'envoi'}`, 'error');
     }
-
-  } catch (error) {
-    console.error('[POPUP] Erreur download:', error);
-
-    if (error.message.includes('fetch')) {
-      showStatus("❌ Serveur inaccessible (localhost:3000)", STATUS_TYPES.ERROR);
-    } else {
-      showStatus(`❌ ${error.message}`, STATUS_TYPES.ERROR);
-    }
+  } catch (e) {
+    showStatus(`✗ ${e.message}`, 'error');
   } finally {
-    state.setLoading(false);
+    setBusy(false);
   }
 }
 
-// Téléchargement local (direct)
-async function downloadLocally() {
-  const url = elements.urlInput.value?.trim();
-  const filename = elements.filenameInput.value?.trim() || 'download';
-
-  // Validation
-  if (!url) {
-    showStatus("⚠️ Veuillez entrer une URL", STATUS_TYPES.WARNING);
-    elements.urlInput.focus();
+async function downloadLocal(item) {
+  if (SERVER_ONLY.has(item.kind)) {
+    showStatus('Ce média est un flux ou une page : utilisez « Envoyer au serveur ».', 'warning', 5000);
     return;
   }
-
-  if (!isValidUrl(url)) {
-    showStatus("❌ URL invalide", STATUS_TYPES.ERROR);
-    elements.urlInput.focus();
-    return;
-  }
-
-  // Vérifier si c'est un stream
-  if (isStreamUrl(url)) {
-    showStatus("⚠️ Stream détecté : Utilisez le serveur !", STATUS_TYPES.WARNING);
-    setTimeout(() => {
-      showStatus("Les navigateurs ne peuvent pas télécharger les streams HLS/DASH directement.", STATUS_TYPES.INFO, 3000);
-    }, 2000);
-    return;
-  }
-
-  state.setLoading(true);
-  showStatus("📥 Démarrage du téléchargement...", STATUS_TYPES.INFO);
-
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-    if (!tab || !tab.id) {
-      throw new Error("Impossible d'accéder à l'onglet actif");
-    }
-
-    // Injecter un script pour forcer le téléchargement
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: (downloadUrl, fileName) => {
-        const anchor = document.createElement('a');
-        anchor.href = downloadUrl;
-        anchor.download = fileName || 'download';
-        anchor.style.display = 'none';
-        document.body.appendChild(anchor);
-        anchor.click();
-
-        // Nettoyer après 100ms
-        setTimeout(() => {
-          document.body.removeChild(anchor);
-        }, 100);
-      },
-      args: [url, sanitizeFilename(filename)]
-    });
-
-    showStatus("✅ Téléchargement lancé !", STATUS_TYPES.SUCCESS, 2000);
-
-  } catch (error) {
-    console.error('[POPUP] Erreur téléchargement local:', error);
-
-    if (error.message.includes('Cannot access')) {
-      showStatus("❌ Page protégée ou extension non autorisée", STATUS_TYPES.ERROR);
-    } else {
-      showStatus(`❌ ${error.message}`, STATUS_TYPES.ERROR);
-    }
-  } finally {
-    state.setLoading(false);
+    await send({ type: 'DOWNLOAD_LOCAL', url: item.url, filename: $('filename').value.trim() || undefined });
+    showStatus('✓ Téléchargement lancé dans le navigateur', 'success', 4000);
+  } catch (e) {
+    showStatus(`✗ ${e.message}`, 'error');
   }
 }
 
-// ================= EVENT LISTENERS =================
-// Initialisation au chargement
-document.addEventListener('DOMContentLoaded', () => {
-  console.log('[POPUP] Initialisation');
-  refreshUI();
-});
-
-// Scan manuel
-if (elements.manualScanBtn) {
-  elements.manualScanBtn.addEventListener('click', () => {
-    console.log('[POPUP] Scan manuel déclenché');
-    refreshUI();
-  });
+async function copyUrl(url) {
+  try {
+    await navigator.clipboard.writeText(url);
+    showStatus('Lien copié', 'info', 2000);
+  } catch {
+    showStatus('Copie impossible', 'error', 3000);
+  }
 }
 
-// Bouton refresh (si présent)
-if (elements.refreshBtn) {
-  elements.refreshBtn.addEventListener('click', refreshUI);
-}
-
-// Sélection d'une vidéo
-if (elements.videoSelector) {
-  elements.videoSelector.addEventListener('change', (e) => {
-    const selectedUrl = e.target.value;
-    if (selectedUrl) {
-      elements.urlInput.value = selectedUrl;
-      state.selectedVideoUrl = selectedUrl;
-      console.log('[POPUP] Vidéo sélectionnée:', selectedUrl.substring(0, 50));
+// ================= SUIVI DES TÉLÉCHARGEMENTS SERVEUR =================
+function renderJobs(jobs) {
+  const box = $('jobs');
+  box.replaceChildren();
+  $('jobsBlock').hidden = !jobs.length;
+  for (const job of jobs) {
+    const name = (job.files?.[0] || '').split('/').pop() || job.name || job.title || displayName(job.url);
+    const active = ['queued', 'analyzing', 'downloading', 'processing', 'retrying'].includes(job.status);
+    const pct = Math.round(job.progress || 0);
+    const label = job.status === 'downloading' && pct ? `${pct}%` : JOB_LABELS[job.status] || job.status;
+    const actions = [];
+    if (job.status === 'completed' && job.files?.length) {
+      actions.push(el('button', {
+        title: 'Récupérer sur ce PC',
+        icon: 'down',
+        onclick: () => send({ type: 'DOWNLOAD_FROM_SERVER', file: job.files[0] })
+          .then(() => showStatus('✓ Récupération lancée', 'success', 3000))
+          .catch((e) => showStatus(`✗ ${e.message}`, 'error')),
+      }));
     }
-  });
-}
-
-// Bouton téléchargement serveur
-if (elements.sendBtn) {
-  elements.sendBtn.addEventListener('click', (e) => {
-    e.preventDefault();
-    downloadViaServer();
-  });
-}
-
-// Bouton téléchargement local
-if (elements.downloadLocalBtn) {
-  elements.downloadLocalBtn.addEventListener('click', (e) => {
-    e.preventDefault();
-    downloadLocally();
-  });
-}
-
-// Validation de l'URL en temps réel
-if (elements.urlInput) {
-  elements.urlInput.addEventListener('blur', (e) => {
-    const url = e.target.value.trim();
-    if (url && !isValidUrl(url)) {
-      showStatus("⚠️ Format d'URL invalide", STATUS_TYPES.WARNING, 3000);
+    if (active) {
+      actions.push(el('button', {
+        title: 'Annuler',
+        icon: 'x',
+        onclick: () => send({ type: 'CANCEL_JOB', id: job.id }).then(loadJobs).catch((e) => showStatus(`✗ ${e.message}`, 'error')),
+      }));
     }
-  });
+    const meta = job.status === 'error'
+      ? el('div', { class: 'job-meta err', text: job.error || 'Erreur' })
+      : el('div', { class: 'job-meta', text: [job.phase, job.speed, job.eta && `reste ${job.eta}`, job.engine].filter(Boolean).join(' · ') || (job.fullSize !== '???' ? job.fullSize : '') });
+    box.append(el('div', { class: 'job' },
+      el('div', { class: 'job-line' },
+        el('span', { class: 'job-name', text: name, title: job.url }),
+        el('span', { class: `job-status s-${job.status}`, text: label }),
+        ...actions),
+      active && job.status !== 'queued' ? el('div', { class: 'bar' }, el('div', { style: `width:${Math.max(3, pct)}%` })) : null,
+      meta));
+  }
+}
 
-  // Entrer pour télécharger
-  elements.urlInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      downloadViaServer();
+async function loadJobs() {
+  try {
+    const res = await send({ type: 'JOBS' });
+    renderJobs(res.jobs || []);
+  } catch {
+    $('jobsBlock').hidden = true;
+  }
+}
+
+// ================= INITIALISATION =================
+async function init() {
+  document.querySelectorAll('[data-icon]').forEach((node) => { node.innerHTML = ICONS[node.dataset.icon] || ''; });
+  $('version').textContent = `v${VERSION}`;
+  state.settings = await getSettings();
+  $('quality').value = state.settings.defaultQuality || 'best';
+
+  // popup.html?tabId=123 : ouvre la fenêtre pour un onglet précis (mode détaché / tests)
+  const forcedId = Number(new URLSearchParams(location.search).get('tabId'));
+  const tab = forcedId
+    ? await chrome.tabs.get(forcedId).catch(() => null)
+    : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+  state.tab = tab || { id: -1, url: '', title: '' };
+  $('pageTitle').textContent = state.tab.title || 'Onglet';
+  $('pageHost').textContent = hostOf(state.tab.url) || state.tab.url || '';
+  if (state.tab.favIconUrl && /^https?:|^data:/.test(state.tab.favIconUrl)) $('favicon').src = state.tab.favIconUrl;
+  else $('favicon').style.visibility = 'hidden';
+
+  $('openOptions').addEventListener('click', () => chrome.runtime.openOptionsPage());
+  $('openDashboard').addEventListener('click', () => chrome.tabs.create({ url: state.settings.serverUrl }));
+  $('rescan').addEventListener('click', () => {
+    $('banners').replaceChildren();
+    checkServer();
+    scan();
+  });
+  $('send').addEventListener('click', () => {
+    const item = currentItem();
+    if (!item) {
+      showStatus('Entrez un lien http(s) valide', 'warning', 4000);
+      $('url').focus();
+      return;
     }
+    sendItems([item]);
   });
-}
-
-// Sanitize filename en temps réel
-if (elements.filenameInput) {
-  elements.filenameInput.addEventListener('input', (e) => {
-    const sanitized = sanitizeFilename(e.target.value);
-    if (sanitized !== e.target.value) {
-      e.target.value = sanitized;
-    }
+  $('local').addEventListener('click', () => {
+    const item = currentItem();
+    if (item) downloadLocal(item);
+    else showStatus('Entrez un lien http(s) valide', 'warning', 4000);
   });
-}
-
-// Bouton clear (si présent)
-if (elements.clearBtn) {
-  elements.clearBtn.addEventListener('click', () => {
-    elements.urlInput.value = '';
-    elements.filenameInput.value = '';
-    elements.videoSelector.selectedIndex = 0;
-    showStatus("Champs nettoyés", STATUS_TYPES.INFO, 2000);
+  $('sendAll').addEventListener('click', () => sendItems(state.items.filter((i) => i.kind !== 'file')));
+  $('url').addEventListener('input', () => {
+    state.urlEdited = true;
+    const kind = classifyMedia($('url').value.trim())?.kind || 'page';
+    $('local').disabled = SERVER_ONLY.has(kind);
+    for (const node of $('list').children) node.classList.remove('selected');
   });
+  $('url').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') $('send').click();
+  });
+
+  if (state.tab.id < 0 || !/^https?:/i.test(state.tab.url || '')) {
+    $('list').replaceChildren(el('div', { class: 'empty', text: 'Ouvrez une page web pour détecter ses médias (ou collez un lien ci-dessous).' }));
+    checkServer().then((ok) => ok && loadJobs());
+    return;
+  }
+  const serverOk = checkServer();
+  await scan();
+  if (await serverOk) {
+    loadJobs();
+    state.jobsTimer = setInterval(loadJobs, 2000);
+  }
 }
 
-// ================= ERROR HANDLING =================
-// Gestion des erreurs globales
-window.addEventListener('error', (event) => {
-  console.error('[POPUP] Erreur globale:', event.error);
-  showStatus("❌ Erreur inattendue", STATUS_TYPES.ERROR);
-});
-
-window.addEventListener('unhandledrejection', (event) => {
-  console.error('[POPUP] Promesse rejetée:', event.reason);
-  showStatus("❌ Erreur de communication", STATUS_TYPES.ERROR);
-});
-
-// ================= DEBUG =================
-if (typeof window !== 'undefined') {
-  window.__popupDebug = {
-    getState: () => ({
-      context: state.context,
-      isLoading: state.isLoading,
-      selectedVideoUrl: state.selectedVideoUrl
-    }),
-    testServer: async () => {
-      try {
-        const response = await fetch(`${CONFIG.SERVER_URL}/health`);
-        const data = await response.json();
-        console.log('[DEBUG] Serveur:', data);
-        return data;
-      } catch (e) {
-        console.error('[DEBUG] Serveur inaccessible:', e);
-        return null;
-      }
-    },
-    refreshUI
-  };
-}
+init().catch((e) => showStatus(`Erreur : ${e.message}`, 'error'));

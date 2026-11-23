@@ -1,21 +1,31 @@
 {
   "name": "web-wget",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "version": "4.0.0",
+  "description": "Gestionnaire de téléchargement (aria2c + yt-dlp + ffmpeg) avec interface web et extension navigateur",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "nodemon server.js"
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node --test"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "downloader",
+    "yt-dlp",
+    "aria2",
+    "hls",
+    "dash",
+    "scraper"
+  ],
+  "author": "OctaveBAHOUN-HOUTOUKPE",
+  "license": "MIT",
   "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
-    "nodemon": "^3.1.11",
-    "uuid": "^13.0.0"
+    "nodemon": "^3.1.11"
   }
 }
